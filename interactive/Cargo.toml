@@ -1,0 +1,14 @@
+[package]
+name = "isar_inspectionroute"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+eframe = "0.19"
+ureq = "2.5"
+paho-mqtt = "0.11"
+serde= { version = "1.0", features = ["derive"] }
+serde_json="1.0"
+ordered-float="1.0"
