@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 #[derive(Debug)]
 #[derive(Clone)]
-pub struct Location {
-    pub pose: Pose,
+pub struct Pose {
+    pub position: Position,
     pub orientation: Orientation,
     // frame_name :String,
 }
@@ -12,7 +12,7 @@ pub struct Location {
 #[derive(Serialize, Deserialize)]
 #[derive(Debug)]
 #[derive(Clone)]
-pub struct Pose {
+pub struct Position {
     pub x: f64,
     pub y: f64,
     pub z: f64,
@@ -36,7 +36,7 @@ pub struct Orientation {
 #[derive(Clone)]
 pub struct Poi {
     pub name: String,
-    pub location: Location,
+    pub pose: Pose,
     // frame_name :String,
 }
 
@@ -51,7 +51,7 @@ pub struct RobotParams {
 pub struct RobotState {
     pub state :String,
     pub t: f64,
-    pub location: Option<Location>,
+    pub current_pose: Option<Pose>,
     pub battery: (f64,f64),
     pub params :RobotParams,
 }

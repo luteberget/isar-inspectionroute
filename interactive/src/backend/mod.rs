@@ -8,7 +8,8 @@ pub mod isar;
 #[derive(Debug, Clone)]
 
 pub enum Event {
-    Task(String, bool),
+    TaskStart(String),
+    TaskEnd(String, bool),
 }
 
 pub trait Backend {

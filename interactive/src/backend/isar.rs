@@ -179,7 +179,7 @@ impl IsarBackend {
             robot_state: RobotState {
                 state: "unknown".to_string(),
                 t: 0.0,
-                location: None,
+                current_pose: None,
                 battery: (1.0, 1.0),
                 params: robot_params,
             },
@@ -241,28 +241,35 @@ impl IsarBackend {
                     );
                 }
 
-                let status_success = task_json.status.as_deref() == Some("partially_successful")
+                let status_succeeded = task_json.status.as_deref() == Some("partially_successful")
                     || task_json.status.as_deref() == Some("successful");
 
-                let status_failues = task_json.status.as_deref() == Some("failed")
+                let status_failed = task_json.status.as_deref() == Some("failed")
                     || task_json.status.as_deref() == Some("cancelled");
 
-                if !status_success && !status_failues {
-                    println!("Warning: unexpected task status {:?}", task_json.status);
-                } else if let Some(mission) = self.running_mission.as_ref() {
+                let status_started = task_json.status.as_deref() == Some("in_progress");
+
+                if let Some(mission) = self.running_mission.as_ref() {
                     if task_json.mission_id.as_deref() != Some(&mission.id) {
                         println!(
                             "Warning: mission id does not match. Checking for known tasks anyway."
                         );
                     }
                     if let Some(task_id) = task_json.task_id.as_ref() {
-                        while let Some(mission_task) =
-                            mission.tasks.iter().find(|t| &t.id == task_id)
-                        {
-                            self.events_queue.push_back((
-                                Instant::now(),
-                                Event::Task(mission_task.poi_name.clone(), status_success),
-                            ));
+                        for mission_task in mission.tasks.iter().filter(|t| &t.id == task_id) {
+                            if status_succeeded || status_failed {
+                                self.events_queue.push_back((
+                                    Instant::now(),
+                                    Event::TaskEnd(mission_task.poi_name.clone(), status_succeeded),
+                                ));
+                            }
+
+                            if status_started {
+                                self.events_queue.push_back((
+                                    Instant::now(),
+                                    Event::TaskStart(mission_task.poi_name.clone()),
+                                ));
+                            }
                         }
                     } else {
                         println!("Warning: no task id in task status message.");
@@ -311,7 +318,7 @@ impl IsarBackend {
                     pos.get("z").unwrap().as_f64().unwrap(),
                 );
 
-                let pose = Pose { x, y, z };
+                let pose = Position { x, y, z };
 
                 let (x, y, z, w) = (
                     ori.get("x").unwrap().as_f64().unwrap(),
@@ -322,7 +329,10 @@ impl IsarBackend {
 
                 let orientation = Orientation { x, y, z, w };
 
-                self.robot_state.location = Some(Location { pose, orientation });
+                self.robot_state.current_pose = Some(Pose {
+                    position: pose,
+                    orientation,
+                });
             } else {
                 println!("Warning: unknown topic {}", msg.topic());
             }
@@ -457,25 +467,25 @@ fn isar_plan_step(poi: &Poi) -> serde_json::Value {
     json!({
         "pose": {
             "position": {
-                "x": poi.location.pose.x,
-                "y": poi.location.pose.y,
-                "z": poi.location.pose.z,
+                "x": poi.pose.position.x,
+                "y": poi.pose.position.y,
+                "z": poi.pose.position.z,
                 "frame_name": "asset",
             },
             "orientation": {
-                "x": poi.location.orientation.x,
-                "y": poi.location.orientation.y,
-                "z": poi.location.orientation.z,
-                "w": poi.location.orientation.w,
+                "x": poi.pose.orientation.x,
+                "y": poi.pose.orientation.y,
+                "z": poi.pose.orientation.z,
+                "w": poi.pose.orientation.w,
                 "frame_name": "asset",
             },
             "frame_name": "asset",
         },
         "tag": poi.name,
         "inspection_target": {
-            "x": poi.location.pose.x,
-            "y": poi.location.pose.y,
-            "z": poi.location.pose.z,
+            "x": poi.pose.position.x,
+            "y": poi.pose.position.y,
+            "z": poi.pose.position.z,
             "frame_name": "asset",
         },
         "inspection_types": ["Image"],

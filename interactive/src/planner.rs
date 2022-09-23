@@ -5,8 +5,8 @@ use std::sync::{
 
 use crate::{
     backend::Event,
-    data::{Location, Poi, RobotState},
-    solver,
+    data::{Pose, Poi, RobotState},
+    solver, app::PendingPoi,
 };
 
 #[derive(Debug)]
@@ -43,10 +43,10 @@ pub struct Planner {
     pub plan_counter: usize,
 }
 
-pub fn estimated_distance(a: &Location, b: &Location) -> f64 {
-    let dx = a.pose.x - b.pose.x;
-    let dy = a.pose.y - b.pose.y;
-    let dz = a.pose.z - b.pose.z;
+pub fn estimated_distance(a: &Pose, b: &Pose) -> f64 {
+    let dx = a.position.x - b.position.x;
+    let dy = a.position.y - b.position.y;
+    let dz = a.position.z - b.position.z;
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
@@ -100,7 +100,7 @@ impl Planner {
 
     pub fn update_event(&mut self, ev: &Event) {
         match ev {
-            Event::Task(poi, _) => {
+            Event::TaskEnd(poi, _) => {
                 if let Some(seqs) = self.plan.as_mut() {
                     for seq in seqs.iter_mut() {
                         seq.retain(|p| &p.name != poi);
@@ -112,6 +112,7 @@ impl Planner {
                     self.n_pois -= 1;
                 }
             }
+            Event::TaskStart(_) => {},
         }
     }
 
@@ -127,7 +128,7 @@ impl Planner {
         }
     }
 
-    pub fn update_state(&mut self, pois: &[Poi], dock: &Option<Poi>, next_state: &RobotState) {
+    pub fn update_state(&mut self, pois: &[PendingPoi], dock: &Option<Poi>, next_state: &RobotState) {
         let mut need_to_plan = false;
 
         if self.n_pois != pois.len() {
@@ -151,8 +152,9 @@ impl Planner {
         self.prev_state = Some(next_state.clone());
 
         if need_to_plan {
+            println!("Need to plan.");
             let job = PlanJob {
-                pois: pois.to_vec(),
+                pois: pois.iter().map(|p| p.poi.clone()).collect(),
                 robot_state: next_state.clone(),
                 dock: dock.clone(),
             };
@@ -163,7 +165,7 @@ impl Planner {
 
 fn unexpected_location(prev_state: &RobotState, next_state: &RobotState) -> bool {
     if let (Some(prev_loc), Some(new_loc)) =
-        (prev_state.location.as_ref(), next_state.location.as_ref())
+        (prev_state.current_pose.as_ref(), next_state.current_pose.as_ref())
     {
         if estimated_distance(prev_loc, new_loc) > 10.0 {
             // Robot jumped 10 m. Replan.
@@ -233,10 +235,10 @@ fn integrate_plan(
     let mut current_time = robot_state.t;
     let mut current_poi = Poi {
         name: "Current location".to_string(),
-        location: robot_state
-            .location
+        pose: robot_state
+            .current_pose
             .clone()
-            .unwrap_or_else(|| sequence[0][0].location.clone()),
+            .unwrap_or_else(|| sequence[0][0].pose.clone()),
     };
 
     let mut current_battery = robot_state.battery.0;
@@ -246,7 +248,7 @@ fn integrate_plan(
         for poi in vehicle.iter() {
             // Go to the place
             let travel_time =
-                estimated_travel_time(estimated_distance(&current_poi.location, &poi.location));
+                estimated_travel_time(estimated_distance(&current_poi.pose, &poi.pose));
             drive_activities.push((
                 PoiTime {
                     poi: current_poi.clone(),
@@ -271,7 +273,7 @@ fn integrate_plan(
         if let Some(dock) = dock.as_ref() {
             // Go to charger
             let travel_time =
-                estimated_travel_time(estimated_distance(&current_poi.location, &dock.location));
+                estimated_travel_time(estimated_distance(&current_poi.pose, &dock.pose));
             drive_activities.push((
                 PoiTime {
                     poi: current_poi.clone(),

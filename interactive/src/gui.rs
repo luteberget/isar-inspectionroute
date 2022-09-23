@@ -8,9 +8,9 @@ use eframe::{
 };
 
 use crate::{
-    app::ParsePoiWindow,
+    app::{ParsePoiWindow, PendingPoi},
     backend::{isar::IsarConnectionBuilder, Backend},
-    data::Location,
+    data::Pose,
 };
 
 const BATTERY_WARNING_LEVEL: f64 = 0.1;
@@ -44,7 +44,7 @@ pub fn draw_gui(app: &mut crate::app::WaypointsApp, ctx: &eframe::egui::Context)
                         if poi.name.starts_with("dock") {
                             app.dock = Some(poi);
                         } else {
-                            app.pending_pois.push(poi);
+                            app.pending_pois.push( PendingPoi { poi, active :false });
                         }
                     }
                     app.parse_poi_window = None;
@@ -232,9 +232,9 @@ fn map_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
     plot.show(ui, |plot_ui| {
         // Current location.
         if let Some(backend) = app.backend.as_ref() {
-            if let Some(loc) = backend.current_robot_state().location.as_ref() {
+            if let Some(loc) = backend.current_robot_state().current_pose.as_ref() {
                 plot_ui.points(
-                    egui::plot::Points::new(PlotPoints::from([loc.pose.x, loc.pose.y]))
+                    egui::plot::Points::new(PlotPoints::from([loc.position.x, loc.position.y]))
                         .shape(egui::plot::MarkerShape::Diamond)
                         .name("Current robot location")
                         .color(eframe::epaint::Color32::DARK_RED)
@@ -248,7 +248,7 @@ fn map_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
             egui::plot::Points::new(PlotPoints::from_iter(
                 app.pending_pois
                     .iter()
-                    .map(|p| [p.location.pose.x, p.location.pose.y]),
+                    .map(|p| [p.poi.pose.position.x, p.poi.pose.position.y]),
             ))
             .name("POI")
             .shape(egui::plot::MarkerShape::Plus)
@@ -258,9 +258,9 @@ fn map_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
 
         // Dock
         if let Some(dock) = app.dock.as_ref() {
-            let loc = &dock.location;
+            let loc = &dock.pose;
             plot_ui.points(
-                egui::plot::Points::new(PlotPoints::from([loc.pose.x, loc.pose.y]))
+                egui::plot::Points::new(PlotPoints::from([loc.position.x, loc.position.y]))
                     .shape(egui::plot::MarkerShape::Circle)
                     .name("Robot dock (charging)")
                     .color(eframe::epaint::Color32::GREEN)
@@ -273,31 +273,31 @@ fn map_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
             let mut prev_loc = app
                 .backend
                 .as_ref()
-                .and_then(|b| b.current_robot_state().location.as_ref());
+                .and_then(|b| b.current_robot_state().current_pose.as_ref());
             for seq in poi_seqs.iter() {
                 for poi in seq.iter() {
-                    draw_arrow(plot_ui, prev_loc, &poi.location);
-                    prev_loc = Some(&poi.location);
+                    draw_arrow(plot_ui, prev_loc, &poi.pose);
+                    prev_loc = Some(&poi.pose);
                 }
 
                 // Arrow to dock
                 if let Some(dock) = app.dock.as_ref() {
-                    draw_arrow(plot_ui, prev_loc, &dock.location);
+                    draw_arrow(plot_ui, prev_loc, &dock.pose);
                 }
-                prev_loc = app.dock.as_ref().map(|d| &d.location);
+                prev_loc = app.dock.as_ref().map(|d| &d.pose);
             }
         }
     });
 }
 
-fn draw_arrow(ui: &mut PlotUi, from: Option<&Location>, to: &Location) {
+fn draw_arrow(ui: &mut PlotUi, from: Option<&Pose>, to: &Pose) {
     ui.arrows(
         Arrows::new(
             [
-                from.map(|l| l.pose.x).unwrap_or(to.pose.x - 3.0),
-                from.map(|l| l.pose.y).unwrap_or(to.pose.y - 3.0),
+                from.map(|l| l.position.x).unwrap_or(to.position.x - 3.0),
+                from.map(|l| l.position.y).unwrap_or(to.position.y - 3.0),
             ],
-            [to.pose.x, to.pose.y],
+            [to.position.x, to.position.y],
         )
         .color(Color32::BLACK),
     );
@@ -326,17 +326,17 @@ fn planner_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
 
 fn poi_list_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
     ui.heading("POIs/inspections");
-    for poi in app.pending_pois.iter_mut() {
+    for p in app.pending_pois.iter_mut() {
         ui.label(format!(
             "POI at x={:.2} y={:.2}",
-            poi.location.pose.x, poi.location.pose.y
+            p.poi.pose.position.x, p.poi.pose.position.y
         ));
     }
 
     if let Some(dock) = app.dock.as_ref() {
         ui.label(format!(
             "Dock at x={:.2} y={:.2}",
-            dock.location.pose.x, dock.location.pose.y
+            dock.pose.position.x, dock.pose.position.y
         ));
     } else {
         ui.label("No dock is known!");

@@ -23,10 +23,20 @@ impl ParsePoiWindow {
     }
 }
 
+pub struct PendingPoi {
+    pub poi: Poi,
+    pub active: bool,
+}
+
+pub struct FinishedPoi {
+    pub poi: Poi,
+    pub success: bool,
+}
+
 pub struct WaypointsApp {
     pub backend: Option<Box<dyn Backend>>,
-    pub pending_pois: Vec<Poi>,
-    pub finished_pois: Vec<(Poi, bool)>,
+    pub pending_pois: Vec<PendingPoi>,
+    pub finished_pois: Vec<FinishedPoi>,
     pub dock: Option<Poi>,
     pub planner: crate::planner::Planner,
     pub parse_poi_window: Option<ParsePoiWindow>,
@@ -46,12 +56,24 @@ impl eframe::App for crate::app::WaypointsApp {
             // Send events to planner.
             while let Some((_t, ev)) = backend.try_recv_event() {
                 match &ev {
-                    crate::backend::Event::Task(poi_name, success) => {
-                        while let Some(idx) =
-                            self.pending_pois.iter().position(|p| &p.name == poi_name)
+                    crate::backend::Event::TaskEnd(poi_name, success) => {
+                        while let Some(idx) = self
+                            .pending_pois
+                            .iter()
+                            .position(|p| &p.poi.name == poi_name)
                         {
-                            let poi = self.pending_pois.remove(idx);
-                            self.finished_pois.push((poi, *success));
+                            let PendingPoi { poi, .. } = self.pending_pois.remove(idx);
+                            self.finished_pois.push(FinishedPoi {
+                                poi,
+                                success: *success,
+                            });
+                        }
+                    }
+                    crate::backend::Event::TaskStart(poi_name) => {
+                        for pending in self.pending_pois.iter_mut() {
+                            if &pending.poi.name == poi_name {
+                                pending.active = true;
+                            }
                         }
                     }
                 }
