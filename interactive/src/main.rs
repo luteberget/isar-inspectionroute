@@ -5,13 +5,14 @@ mod app;
 mod backend;
 mod gui;
 mod planner;
-mod dvrp;
+mod solver;
 
 fn main() {
     eframe::run_native("isar_inspectionroute interactive", eframe::NativeOptions::default(), Box::new(|ctx| {
         ctx.egui_ctx.set_visuals(Visuals::light());
         Box::new(app::WaypointsApp {
-            pois: Default::default(),
+            pending_pois: Default::default(),
+            finished_pois: Default::default(),
             planner: planner::Planner::new(),
             parse_poi_window: None,
             connect_to_backend_window: None,

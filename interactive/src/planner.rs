@@ -4,18 +4,20 @@ use std::sync::{
 };
 
 use crate::{
-    backend::{Event, Task, TaskId},
+    backend::Event,
     data::{Location, Poi, RobotState},
-    dvrp,
+    solver,
 };
 
 #[derive(Debug)]
 pub struct TemporalPlan {
-    pub generation :usize,
+    pub generation: usize,
     pub battery_profile: Vec<(f64, f64)>,
     pub drive_activities: Vec<(PoiTime, PoiTime)>,
     pub inspection_activities: Vec<(f64, f64)>,
 }
+
+pub type PoiSequence = Vec<Vec<Poi>>;
 
 #[derive(Debug)]
 pub struct PoiTime {
@@ -31,12 +33,14 @@ pub struct PlanJob {
 }
 
 pub struct Planner {
-    pub plan: Option<TemporalPlan>,
+    pub plan: Option<PoiSequence>,
     n_pois: usize,
+    n_docks: usize,
     prev_state: Option<RobotState>,
     tx_job: std::sync::mpsc::Sender<PlanJob>,
-    rx_plan: std::sync::mpsc::Receiver<TemporalPlan>,
+    rx_plan: std::sync::mpsc::Receiver<PoiSequence>,
     planner_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub plan_counter: usize,
 }
 
 pub fn estimated_distance(a: &Location, b: &Location) -> f64 {
@@ -50,7 +54,7 @@ pub fn estimated_travel_time(dist: f64) -> f64 {
     dist
 }
 
-pub fn estimate_battery_usage(dist :f64) -> f64 {
+pub fn estimate_battery_usage(dist: f64) -> f64 {
     dist * 0.1
 }
 
@@ -70,23 +74,45 @@ impl Planner {
         Planner {
             plan: None,
             n_pois: 0,
+            n_docks: 0,
             prev_state: None,
             tx_job,
             rx_plan,
             planner_running,
+            plan_counter: 0,
         }
     }
 
-    pub fn get_plan(&self) -> &Option<TemporalPlan> {
-        &self.plan
+    pub fn get_temporal_plan(
+        &self,
+        robot_state: &RobotState,
+        dock: &Option<Poi>,
+    ) -> Option<TemporalPlan> {
+        self.plan
+            .as_ref()
+            .map(|p| integrate_plan(p, robot_state, dock))
+        // &self.plan
     }
 
-    pub fn dispatch(&mut self, mut run: impl FnMut(Task) -> TaskId) {
-        todo!()
+    pub fn get_plan_sequence(&self) -> (usize, &Option<PoiSequence>) {
+        (self.plan_counter, &self.plan)
     }
 
-    pub fn update_event(&mut self, ev: Event) {
-        todo!()
+    pub fn update_event(&mut self, ev: &Event) {
+        match ev {
+            Event::Task(poi, _) => {
+                if let Some(seqs) = self.plan.as_mut() {
+                    for seq in seqs.iter_mut() {
+                        seq.retain(|p| &p.name != poi);
+                    }
+                }
+
+                // A POI succeeded or failed. We expect one less POI in the next update.
+                if self.n_pois > 0 {
+                    self.n_pois -= 1;
+                }
+            }
+        }
     }
 
     pub fn is_planner_running(&self) -> bool {
@@ -97,14 +123,21 @@ impl Planner {
         while let Ok(x) = self.rx_plan.try_recv() {
             println!("NEW PLAN {:?}", x);
             self.plan = Some(x);
+            self.plan_counter += 1;
         }
     }
 
-    pub fn update_state(&mut self, pois: &[Poi], dock :&Option<Poi>, next_state: &RobotState) {
+    pub fn update_state(&mut self, pois: &[Poi], dock: &Option<Poi>, next_state: &RobotState) {
         let mut need_to_plan = false;
 
         if self.n_pois != pois.len() {
             self.n_pois = pois.len();
+            need_to_plan = true;
+        }
+
+        let n_docks = if dock.is_some() { 1 } else { 0 };
+        if self.n_docks != n_docks {
+            self.n_docks = n_docks;
             need_to_plan = true;
         }
 
@@ -154,9 +187,8 @@ fn unexpected_battery(prev_state: &RobotState, next_state: &RobotState) -> bool 
 fn planner_thread(
     planner_running: Arc<AtomicBool>,
     get_job: std::sync::mpsc::Receiver<PlanJob>,
-    mut set_plan: impl FnMut(TemporalPlan),
+    mut set_plan: impl FnMut(PoiSequence),
 ) {
-    let mut counter = 0;
     loop {
         let job = {
             let mut job = match get_job.recv() {
@@ -171,10 +203,103 @@ fn planner_thread(
         };
 
         planner_running.store(true, Ordering::Relaxed);
-        let mut result = dvrp::dvrp(job);
+        let result = solver::solve(job);
         planner_running.store(false, Ordering::Relaxed);
-        result.generation = counter;
-        counter += 1;
         set_plan(result);
+    }
+}
+
+const INSPECTION_DURATION: f64 = 5.0;
+const TOTAL_CHARGE_TIME: f64 = 10.0;
+
+fn integrate_plan(
+    sequence: &PoiSequence,
+    robot_state: &RobotState,
+    dock: &Option<Poi>,
+) -> TemporalPlan {
+    let mut battery_profile = vec![];
+    let mut drive_activities = vec![];
+    let mut inspection_activities = vec![];
+
+    if sequence.is_empty() || sequence[0].is_empty() {
+        return TemporalPlan {
+            generation: 0,
+            battery_profile,
+            drive_activities,
+            inspection_activities,
+        };
+    }
+
+    let mut current_time = robot_state.t;
+    let mut current_poi = Poi {
+        name: "Current location".to_string(),
+        location: robot_state
+            .location
+            .clone()
+            .unwrap_or_else(|| sequence[0][0].location.clone()),
+    };
+
+    let mut current_battery = robot_state.battery.0;
+    battery_profile.push((current_time, current_battery));
+
+    for vehicle in sequence.iter() {
+        for poi in vehicle.iter() {
+            // Go to the place
+            let travel_time =
+                estimated_travel_time(estimated_distance(&current_poi.location, &poi.location));
+            drive_activities.push((
+                PoiTime {
+                    poi: current_poi.clone(),
+                    time: current_time,
+                },
+                PoiTime {
+                    poi: poi.clone(),
+                    time: current_time + travel_time,
+                },
+            ));
+            current_time += travel_time;
+            current_battery -= estimate_battery_usage(travel_time);
+            current_poi = poi.clone();
+            battery_profile.push((current_time, current_battery));
+
+            // Do the inspection
+            inspection_activities.push((current_time, current_time + INSPECTION_DURATION));
+            current_time += INSPECTION_DURATION;
+            battery_profile.push((current_time, current_battery));
+        }
+
+        if let Some(dock) = dock.as_ref() {
+            // Go to charger
+            let travel_time =
+                estimated_travel_time(estimated_distance(&current_poi.location, &dock.location));
+            drive_activities.push((
+                PoiTime {
+                    poi: current_poi.clone(),
+                    time: current_time,
+                },
+                PoiTime {
+                    poi: dock.clone(),
+                    time: current_time + travel_time,
+                },
+            ));
+            current_time += travel_time;
+            current_battery -= estimate_battery_usage(travel_time);
+            current_poi = dock.clone();
+            battery_profile.push((current_time, current_battery));
+
+            // wait for charging
+            let charge_time = (robot_state.battery.1 - current_battery) * TOTAL_CHARGE_TIME
+                / robot_state.battery.1;
+            current_time += charge_time;
+            current_battery = robot_state.battery.1;
+            battery_profile.push((current_time, current_battery));
+        }
+    }
+
+    TemporalPlan {
+        generation: 0,
+        battery_profile,
+        drive_activities,
+        inspection_activities,
     }
 }

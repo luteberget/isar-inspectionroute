@@ -25,12 +25,13 @@ impl ParsePoiWindow {
 
 pub struct WaypointsApp {
     pub backend: Option<Box<dyn Backend>>,
-    pub pois: Vec<Poi>,
-    pub dock :Option<Poi>,
+    pub pending_pois: Vec<Poi>,
+    pub finished_pois: Vec<(Poi, bool)>,
+    pub dock: Option<Poi>,
     pub planner: crate::planner::Planner,
     pub parse_poi_window: Option<ParsePoiWindow>,
     pub connect_to_backend_window: Option<IsarConnectionBuilder>,
-    pub axis_link : (usize, LinkedAxisGroup),
+    pub axis_link: (usize, LinkedAxisGroup),
 }
 
 impl eframe::App for crate::app::WaypointsApp {
@@ -39,17 +40,35 @@ impl eframe::App for crate::app::WaypointsApp {
             state.process_messages();
         }
 
-        if let Some(backend) = self.backend.as_mut() {
-            self.planner.process_messages();
+        self.planner.process_messages();
 
+        if let Some(backend) = self.backend.as_mut() {
             // Send events to planner.
             while let Some((_t, ev)) = backend.try_recv_event() {
-                self.planner.update_event(ev);
-            }
+                match &ev {
+                    crate::backend::Event::Task(poi_name, success) => {
+                        while let Some(idx) =
+                            self.pending_pois.iter().position(|p| &p.name == poi_name)
+                        {
+                            let poi = self.pending_pois.remove(idx);
+                            self.finished_pois.push((poi, *success));
+                        }
+                    }
+                }
 
+                self.planner.update_event(&ev);
+            }
             // Send state to planner.
-            self.planner
-                .update_state(&self.pois, &self.dock, backend.current_robot_state());
+            self.planner.update_state(
+                &self.pending_pois,
+                &self.dock,
+                backend.current_robot_state(),
+            );
+
+            // Send planned sequence to backend.
+            if let (counter, Some(seq)) = self.planner.get_plan_sequence() {
+                backend.set_plan(counter, seq, &self.dock);
+            }
         }
 
         crate::gui::draw_gui(self, ctx);

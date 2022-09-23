@@ -1,35 +1,19 @@
-use crate::data::{Location,  RobotState};
+use crate::{
+    data::{Poi, RobotState},
+    planner::PoiSequence,
+};
 
 pub mod isar;
-
-#[derive(Clone, Copy, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TaskId(pub usize);
-
-#[derive(Debug, Clone)]
-
-#[allow(unused)]
-pub enum Task {
-    Inspect(Location),
-    Charge(Location)
-}
 
 #[derive(Debug, Clone)]
 
 pub enum Event {
-    RobotState(RobotState),
-    Task(TaskId, TaskEvent),
-}
-
-#[derive(Debug, Clone, Copy)]
-#[allow(unused)]
-pub enum TaskEvent {
-    Success,
-    Failure,
+    Task(String, bool),
 }
 
 pub trait Backend {
-    fn set_mission(&mut self, task: &[Task]) -> Vec<TaskId>;
+    fn set_plan(&mut self, plan_counter: usize, plan: &PoiSequence, dock: &Option<Poi>);
     fn try_recv_event(&mut self) -> Option<(std::time::Instant, Event)>;
-    fn backend_name(&self) -> &str;
+    fn backend_description(&self) -> &str;
     fn current_robot_state(&self) -> &RobotState;
 }

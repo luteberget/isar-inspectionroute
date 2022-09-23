@@ -1,7 +1,7 @@
 use eframe::{
     egui::{
         self,
-        plot::{HLine, LinkedAxisGroup, PlotPoint, PlotPoints, Text, VLine},
+        plot::{Arrows, HLine, LinkedAxisGroup, PlotPoint, PlotPoints, PlotUi, Text, VLine},
         TextEdit, Widget,
     },
     epaint::Color32,
@@ -10,6 +10,7 @@ use eframe::{
 use crate::{
     app::ParsePoiWindow,
     backend::{isar::IsarConnectionBuilder, Backend},
+    data::Location,
 };
 
 const BATTERY_WARNING_LEVEL: f64 = 0.1;
@@ -43,7 +44,7 @@ pub fn draw_gui(app: &mut crate::app::WaypointsApp, ctx: &eframe::egui::Context)
                         if poi.name.starts_with("dock") {
                             app.dock = Some(poi);
                         } else {
-                            app.pois.push(poi);
+                            app.pending_pois.push(poi);
                         }
                     }
                     app.parse_poi_window = None;
@@ -112,18 +113,18 @@ fn add_poi_window(
 
 fn timelines_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
     ui.heading("Timelines");
-    let plan_idx = app
-        .planner
-        .get_plan()
-        .as_ref()
-        .map(|x| x.generation)
-        .unwrap_or(0);
 
+    let plan_idx = app.planner.plan_counter;
     ui.label("Locations");
     let y0 = 0.0;
     let y1 = 1.0;
 
     let link_axis = LinkedAxisGroup::x();
+
+    let plan = app.backend.as_ref().and_then(|b| {
+        app.planner
+            .get_temporal_plan(b.current_robot_state(), &app.dock)
+    });
 
     egui::plot::Plot::new(format!("loc_tl{}", plan_idx))
         .height(50.0)
@@ -132,7 +133,7 @@ fn timelines_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) 
         .allow_scroll(false)
         .show_axes([true, false])
         .show(ui, |plot_ui| {
-            if let Some(plan) = app.planner.get_plan() {
+            if let Some(plan) = plan.as_ref() {
                 for drive_box in plan.drive_activities.iter() {
                     plot_ui.polygon(
                         egui::plot::Polygon::new(PlotPoints::from_iter([
@@ -164,7 +165,7 @@ fn timelines_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) 
         .show_axes([true, false])
         .link_axis(link_axis.clone())
         .show(ui, |plot_ui| {
-            if let Some(plan) = app.planner.get_plan() {
+            if let Some(plan) = plan.as_ref() {
                 for inspection in plan.inspection_activities.iter() {
                     plot_ui.polygon(
                         egui::plot::Polygon::new(PlotPoints::from_iter([
@@ -190,9 +191,9 @@ fn timelines_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) 
         .allow_boxed_zoom(false)
         .allow_scroll(false)
         .show_axes([true, false])
-        .link_axis(link_axis.clone())
+        .link_axis(link_axis)
         .show(ui, |plot_ui| {
-            if let Some(plan) = app.planner.get_plan() {
+            if let Some(plan) = plan.as_ref() {
                 plot_ui.line(egui::plot::Line::new(PlotPoints::from_iter(
                     plan.battery_profile.iter().map(|(x, y)| [*x, *y]),
                 )));
@@ -245,7 +246,7 @@ fn map_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
         // POIs
         plot_ui.points(
             egui::plot::Points::new(PlotPoints::from_iter(
-                app.pois
+                app.pending_pois
                     .iter()
                     .map(|p| [p.location.pose.x, p.location.pose.y]),
             ))
@@ -266,21 +267,55 @@ fn map_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
                     .radius(8.0),
             );
         }
+
+        // Plan arrows
+        if let (_, Some(poi_seqs)) = app.planner.get_plan_sequence() {
+            let mut prev_loc = app
+                .backend
+                .as_ref()
+                .and_then(|b| b.current_robot_state().location.as_ref());
+            for seq in poi_seqs.iter() {
+                for poi in seq.iter() {
+                    draw_arrow(plot_ui, prev_loc, &poi.location);
+                    prev_loc = Some(&poi.location);
+                }
+
+                // Arrow to dock
+                if let Some(dock) = app.dock.as_ref() {
+                    draw_arrow(plot_ui, prev_loc, &dock.location);
+                }
+                prev_loc = app.dock.as_ref().map(|d| &d.location);
+            }
+        }
     });
+}
+
+fn draw_arrow(ui: &mut PlotUi, from: Option<&Location>, to: &Location) {
+    ui.arrows(
+        Arrows::new(
+            [
+                from.map(|l| l.pose.x).unwrap_or(to.pose.x - 3.0),
+                from.map(|l| l.pose.y).unwrap_or(to.pose.y - 3.0),
+            ],
+            [to.pose.x, to.pose.y],
+        )
+        .color(Color32::BLACK),
+    );
 }
 
 fn planner_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
     ui.heading("Planner");
     ui.label(&format!(
-        "Plan available: {}",
-        if app.planner.get_plan().is_some() {
+        "Plan available: {} (plan #{})",
+        if app.planner.get_plan_sequence().1.is_some() {
             "yes"
         } else {
             "no"
-        }
+        },
+        app.planner.get_plan_sequence().0
     ));
     ui.label(&format!(
-        "Planer running: {}",
+        "Planner running: {}",
         if app.planner.is_planner_running() {
             "yes"
         } else {
@@ -291,7 +326,7 @@ fn planner_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
 
 fn poi_list_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
     ui.heading("POIs/inspections");
-    for poi in app.pois.iter_mut() {
+    for poi in app.pending_pois.iter_mut() {
         ui.label(format!(
             "POI at x={:.2} y={:.2}",
             poi.location.pose.x, poi.location.pose.y
@@ -321,7 +356,7 @@ fn poi_list_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
 fn backend_gui(ui: &mut eframe::egui::Ui, app: &mut crate::app::WaypointsApp) {
     match app.backend.as_mut() {
         Some(backend) => {
-            ui.label(format!("Connected to {}", backend.backend_name()));
+            ui.label(format!("Connected to {}", backend.backend_description()));
             if ui.button("⊗ Disconnect").clicked() {
                 app.backend = None;
                 return;
@@ -359,7 +394,7 @@ fn connect_backend_window(
     ui.label(status_msg);
     if let Some((idx, robots)) = robots {
         egui::ComboBox::from_label("Select one!")
-            .show_index(ui, idx, robots.len(), |i| robots[i].clone());
+            .show_index(ui, idx, robots.len(), |i| robots[i].name.clone());
 
         if ui.button("Connect!").clicked() {
             return Some(Box::new(std::mem::take(state).into_backend()));
