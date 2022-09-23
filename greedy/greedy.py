@@ -1,8 +1,6 @@
 import math
 import json
 import argparse
-from tkinter import N
-from xmlrpc.client import Boolean
 import rospy
 import requests
 from requests.compat import urljoin
@@ -158,7 +156,7 @@ def convert_task_isar(tag, location: PoseStamped):
 class PlannerState:
     planner_running: bool = False
     waypoints: List[Tuple[int, PoseStamped]] = []
-    waypoints_dirty :Boolean = False
+    waypoints_dirty :bool = False
     robot_is_ready: bool = False
     robot_current_location: Optional[PoseStamped] = None
     params: GreedyPlannerParameters
@@ -279,16 +277,6 @@ class PlannerState:
             for task_data, wp in zip(response["tasks"], wp_sequence)
         ]
         self.robot_is_ready = False
-
-    def send_robot_goto(self, location):
-        """Send a command to ISAR saying that the robot should go to the given location."""
-        self.robot_is_ready = False
-        self.robot_current_location = location
-        data = convert_pose_isar(location)
-        url = urljoin(self.params.isar_url, "schedule/drive-to")
-        print(f"Sending ISAR command ({url}) to go to: {data}")
-        req = requests.post(url, json=data)
-        print(f"Result: {req} {req.text}")
 
     def set_status(self, s):
         if self.last_status_message == s:
