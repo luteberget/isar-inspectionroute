@@ -1,12 +1,14 @@
 from typing import List, Tuple
-from model import Location, calculate_distance
+from model import BatteryConstraint, Location, calculate_distance
 
 def greedy_sequence(
-    loc: Location, wps: List[Tuple[int, Location]]
+    loc: Location, wps: List[Tuple[int, Location]], _battery :BatteryConstraint
 ) -> List[Tuple[int, Location]]:
     """Sequence the waypoints, starting from the initial location `loc`.
     If the initial location is not given, the first waypoint is used as the current location.
     Returns a permutation of `wps` by greedily selecting the closest point from the previous location."""
+
+    # NOTE battery constraint is ignored
 
     xs = []
     if loc is None and len(wps) > 0:

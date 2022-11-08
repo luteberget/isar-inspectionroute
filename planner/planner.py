@@ -6,12 +6,13 @@ import time
 from requests.compat import urljoin
 import paho.mqtt.client as mqtt
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from alitra import Pose
 import alitra
 import robplanpoints
-from model import Location, calculate_distance
+from model import BatteryConstraint, Location
 from greedy import greedy_sequence
+from vrp import optimize_waypoint_seq
 
 
 all_locations = list(
@@ -34,6 +35,7 @@ class GreedyPlannerParameters:
     mqtt_host: str
     mqtt_port: int
     delay_adding_waypoints: int
+    planner_fn: Any
 
 
 def parse_parameters() -> Tuple[GreedyPlannerParameters, List[Location]]:
@@ -80,8 +82,18 @@ def parse_parameters() -> Tuple[GreedyPlannerParameters, List[Location]]:
         type=int,
     )
 
+    parser.add_argument(
+        "--vrp",
+        help="Use VRP planner for sequencing and battery constraints.",
+        action="store_true",
+    )
+
     args = parser.parse_args()
     print(f"args {args}")
+
+    planner_fn = greedy_sequence
+    if args.vrp:
+        planner_fn = optimize_waypoint_seq
 
     params = GreedyPlannerParameters(
         args.isar_url,
@@ -89,10 +101,10 @@ def parse_parameters() -> Tuple[GreedyPlannerParameters, List[Location]]:
         args.mqtt_hostname,
         args.mqtt_port,
         args.delay_adding,
+        planner_fn,
     )
 
     return params, all_locations
-
 
 
 def convert_pose_isar(location: Location):
@@ -124,13 +136,13 @@ def json_to_alitra_pose(json_pose):
             alitra.Frame(json_pose["position"]["frame"]),
         ),
         alitra.Orientation(
-                        json_pose["orientation"]["x"],
+            json_pose["orientation"]["x"],
             json_pose["orientation"]["y"],
             json_pose["orientation"]["z"],
             json_pose["orientation"]["w"],
             alitra.Frame(json_pose["orientation"]["frame"]),
         ),
-        frame=alitra.Frame(json_pose["frame"])
+        frame=alitra.Frame(json_pose["frame"]),
     )
 
 
@@ -148,8 +160,10 @@ def convert_task_isar(tag, location: Location):
         "inspection_types": ["Image"],
     }
 
-def is_task_finished(msg :str):
+
+def is_task_finished(msg: str):
     return msg == "successful" or msg == "partially_successful" or msg == "failed"
+
 
 class PlannerState:
     waypoints: List[Tuple[int, Location]] = []
@@ -170,7 +184,7 @@ class PlannerState:
         mqtt_isar_task_topic = f"isar/{self.params.robot_name}/task"
         mqtt_isar_robot_location_topic = f"isar/{self.params.robot_name}/pose"
 
-        # The ncallback for when the client receives a CONNACK response from the server.
+        # The callback for when the client receives a CONNACK response from the server.
         def mqtt_connect(client, userdata, flags, rc):
             print("Connected with result code " + str(rc))
             # Subscribing in on_connect() means that if we lose the connection and
@@ -181,7 +195,7 @@ class PlannerState:
 
         # The callback for when a PUBLISH message is received from the server.
         def mqtt_message(client, userdata, msg):
-            #print("MQTT: ", msg.topic + " " + str(msg.payload))
+            # print("MQTT: ", msg.topic + " " + str(msg.payload))
             if msg.topic == mqtt_isar_state_topic:
                 state_msg = json.loads(msg.payload)
                 if state_msg["state"] == "idle":
@@ -199,8 +213,15 @@ class PlannerState:
                 print("Received task message", task_msg)
                 if self.current_mission_tasks is not None:
                     for (wp_id, task_id) in self.current_mission_tasks:
-                        if task_id == task_msg["task_id"] and is_task_finished(task_msg["status"]):
-                            print("removing wp_id ", wp_id, "because it has status", task_msg["status"])
+                        if task_id == task_msg["task_id"] and is_task_finished(
+                            task_msg["status"]
+                        ):
+                            print(
+                                "removing wp_id ",
+                                wp_id,
+                                "because it has status",
+                                task_msg["status"],
+                            )
                             self.waypoints = [
                                 (id_, wp) for id_, wp in self.waypoints if id_ != wp_id
                             ]
@@ -227,6 +248,9 @@ class PlannerState:
 
         return f
 
+    def get_battery_constraint(self) -> BatteryConstraint | None:
+        return None
+
     def plan_and_start_mission(self):
         while True:
             ok = self.try_plan_and_start_mission()
@@ -237,6 +261,11 @@ class PlannerState:
                 time.sleep(1)
 
     def try_plan_and_start_mission(self):
+        # If we haven't received the robot's starting location yet
+        if self.robot_current_location is None:
+            print("Cannot set plan before knowing where the robot is located.")
+            return False
+
         # First, cancel existing mission
         if self.current_mission_id is not None:
             url = urljoin(self.params.isar_url, "schedule/stop-mission")
@@ -250,8 +279,8 @@ class PlannerState:
                 return False
 
         # Sequence the waypoints
-        wp_sequence = greedy_sequence(
-            self.robot_current_location, [x for x in self.waypoints]
+        wp_sequence = self.params.planner_fn(
+            self.robot_current_location, [x for x in self.waypoints], self.get_battery_constraint()
         )
 
         # Send the sequence as a mission to ISAR.
@@ -278,7 +307,12 @@ class PlannerState:
                 (wp[0], task_data["id"])
                 for task_data, wp in zip(response["tasks"], wp_sequence)
             ]
-            print("Current mission", self.current_mission_id, "tasks", self.current_mission_tasks)
+            print(
+                "Current mission",
+                self.current_mission_id,
+                "tasks",
+                self.current_mission_tasks,
+            )
             self.robot_is_ready = False
             return True
         else:

@@ -1,8 +1,7 @@
 from typing import List, Tuple
 from networkx import DiGraph
 
-from model import BatteryConstraint
-from planner import Location, calculate_distance
+from model import BatteryConstraint, Location, calculate_distance
 from vrpy import VehicleRoutingProblem
 
 SOLVER_TIME_LIMIT: float = 15
@@ -13,6 +12,7 @@ def optimize_waypoint_seq(
     wps: List[Tuple[int, Location]],
     battery: BatteryConstraint | None,
 ) -> List[Tuple[int, Location]]:
+    print(wps)
     if battery is None:
         return seq_open(start_location, wps)
     else:
@@ -28,13 +28,14 @@ def seq_open(
 
     # Add edge from start location (Source) to all
     for i in range(len(wps)):
-        d = calculate_distance(start_location, wps[i][0])
+        d = calculate_distance(start_location, wps[i][1])
         G.add_edge("Source", i, cost=d)
 
     # Add wp edges
     for i in range(len(wps)):
-        for j in range(i, len(wps)):
-            d = calculate_distance(wps[i][0], wps[j][0])
+        for j in range(i + 1, len(wps)):
+            d = calculate_distance(wps[i][1], wps[j][1])
+            print("dist", i, j, d)
             G.add_edge(i, j, cost=d)
             G.add_edge(j, i, cost=d)
 
@@ -44,12 +45,12 @@ def seq_open(
 
     prob = VehicleRoutingProblem(G, num_vehicles=1)
     prob.solve(time_limit=SOLVER_TIME_LIMIT)
-    print(prob.best_routes)
+    print("Open VRP solution", prob.best_routes_cost, prob.best_routes)
     if len(prob.best_routes) > 1:
         print("Warning: multiple routes found by the Open VRP")
 
     for route in prob.best_routes.values():
-        return [wps[i] for i in route]
+        return [wps[i] for i in route[1:-1]]
 
 
 def seq_charging(
@@ -73,8 +74,8 @@ def seq_charging(
 
     # Add wp edges
     for i in range(len(wps)):
-        for j in range(i, len(wps)):
-            d = calculate_distance(wps[i][0], wps[j][0])
+        for j in range(i + 1, len(wps)):
+            d = calculate_distance(wps[i][1], wps[j][1])
             G.add_edge(i, j, cost=d, time=d)
             G.add_edge(j, i, cost=d, time=d)
 
@@ -97,7 +98,7 @@ def seq_charging(
     output_route = []
 
     def add_output_route(route):
-        for node in route:
+        for node in route[1:-1]:
             if node == -1:
                 continue
             output_route.append(wps[node])
