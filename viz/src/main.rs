@@ -49,10 +49,17 @@ pub struct Status {
     pub plan: Vec<PlanStep>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatteryConstraint {
+    pub charger_location: Location,
+    pub battery_distance: f64,
+    pub remaining_distance: f64,
+}
+
 struct PlanApp {
     _mqtt_client: paho_mqtt::Client,
     mqtt_receiver: Receiver<Option<paho_mqtt::Message>>,
-    batt_level: Option<f64>,
+    battery_constraint: Option<BatteryConstraint>,
     waypoints: Option<Vec<Location>>,
     current_location: Option<Location>,
     status: Option<Status>,
@@ -86,17 +93,9 @@ impl PlanApp {
                         pose: serde_json::from_value(pose_json).unwrap(),
                     });
                 }
-                "planner/override_battery_level" => {
-                    let json =
-                        serde_json::from_str::<serde_json::Value>(&msg.payload_str()).unwrap();
-                    let level = json
-                        .as_object()
-                        .unwrap()
-                        .get("level")
-                        .unwrap()
-                        .as_f64()
-                        .unwrap();
-                    self.batt_level = Some(level);
+                "planner/battery_constraint" => {
+                    self.battery_constraint =
+                        Some(serde_json::from_str(&msg.payload_str()).unwrap());
                 }
                 "planner/status" => {
                     self.status = Some(serde_json::from_str(&msg.payload_str()).unwrap());
@@ -116,8 +115,16 @@ impl PlanApp {
             egui::SidePanel::left("left_panel")
                 .default_width(500.0)
                 .show_inside(ui, |ui| {
-                    if let Some(batt) = &self.batt_level {
-                        ui.label(format!("Battery {:.2}", batt));
+                    if let Some(batt) = &self.battery_constraint {
+                        ui.label(format!("Battery distance {:.2}", batt.battery_distance));
+                        ui.label(format!(
+                            "Battery full distance {:.2}",
+                            batt.remaining_distance
+                        ));
+                        ui.label(format!(
+                            "Battery charger location {:?}",
+                            batt.charger_location
+                        ));
                     } else {
                         ui.label(format!("Battery unknown"));
                     }
@@ -191,6 +198,20 @@ impl PlanApp {
                     );
                 }
 
+                // Charger
+                if let Some(batt) = self.battery_constraint.as_ref() {
+                    plot_ui.points(
+                        egui::plot::Points::new(PlotPoints::from([
+                            batt.charger_location.pose.position.x,
+                            batt.charger_location.pose.position.y,
+                        ]))
+                        .shape(egui::plot::MarkerShape::Circle)
+                        .name("Robot dock (charging)")
+                        .color(eframe::epaint::Color32::LIGHT_RED)
+                        .radius(8.0),
+                    );
+                }
+
                 // // Dock
                 // if let Some(dock) = app.dock.as_ref() {
                 //     let loc = &dock.pose;
@@ -205,7 +226,7 @@ impl PlanApp {
 
                 // Plan arrows
                 if let Some(status) = self.status.as_ref() {
-                    let mut prev_loc = self.current_location.as_ref().map(|x| &x.pose);
+                    let mut prev_loc = None; //self.current_location.as_ref().map(|x| &x.pose);
 
                     for item in status.plan.iter() {
                         draw_arrow(plot_ui, prev_loc, &item.location.pose);
@@ -250,7 +271,7 @@ fn main() {
             mqtt_client.subscribe("planner/waypoints", 0).unwrap();
 
             mqtt_client
-                .subscribe("planner/override_battery_level", 0)
+                .subscribe("planner/battery_constraint", 0)
                 .unwrap();
             mqtt_client.subscribe("isar/william/pose", 0).unwrap();
             println!("Connected to MQTT.")
@@ -263,7 +284,7 @@ fn main() {
     let app = PlanApp {
         _mqtt_client: mqtt_client,
         mqtt_receiver,
-        batt_level: None,
+        battery_constraint: None,
         waypoints: None,
         status: None,
         current_location: None,
