@@ -26,7 +26,7 @@ all_locations = list(
     map(lambda args: Location(*args), robplanpoints.predefined_poses.items())
 )
 
-charger_location = None #all_locations.pop(0)
+charger_location = robplanpoints.robot_charger_pose
 
 
 def loc_string(location: Location):
@@ -329,11 +329,15 @@ class PlannerState:
             return False
 
         # Sequence the waypoints
-        print(self.get_battery_constraint())
+        battery_constraint = self.get_battery_constraint()
+        print(battery_constraint)
+        if battery_constraint is not None:
+            self.publish_battery_constraint(battery_constraint)
+
         wp_sequence = self.params.planner_fn(
             self.robot_current_location,
             [x for x in self.waypoints],
-            self.get_battery_constraint(),
+            battery_constraint,
         )
 
         # Send the sequence as a mission to ISAR.
@@ -395,6 +399,11 @@ class PlannerState:
         print("write waypoints", json_output);
         self._mqtt_client.publish("planner/waypoints", json_output, retain=True)
 
+    def publish_battery_constraint(self, battery_constraint :BatteryConstraint):
+        json_output = json_dumps_dataclass(battery_constraint)
+        print("write battery constraint", json_output);
+        self._mqtt_client.publish("planner/battery_constraint", json_output, retain=True)
+
     def integrate_plan(self, wp_sequence: List[Tuple[int, Location]]):
         cost = 0
         battery = self.robot_battery_level * robplanpoints.robot_battery_distance
@@ -444,8 +453,14 @@ planner = PlannerState(params)
 
 previous_added_waypoint_time = time.time()
 add_fn = planner.add_waypoint_fn()
+if params.delay_adding_waypoints == 0:
+    while len(locations_to_add) > 0:
+        add_fn(locations_to_add.pop(0))
+        previous_added_waypoint_time = time.time()
+
 while True:
-    status = f"Robot status: ready={planner.robot_is_idle} loc={loc_string(planner.robot_current_location)}. "
+    #status = f"Robot status: ready={planner.robot_is_idle} loc={loc_string(planner.robot_current_location)}. "
+    status = f"Robot status: ready={planner.robot_is_idle}. "
 
     if (
         time.time() - previous_added_waypoint_time >= params.delay_adding_waypoints
