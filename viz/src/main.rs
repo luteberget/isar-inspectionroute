@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use eframe::{
     egui::{self, plot::PlotPoints, Visuals},
     epaint::Color32,
@@ -42,11 +44,17 @@ pub struct PlanStep {
     pub remaining_battery: f64,
 }
 
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Status {
+pub struct RobotPlan {
+    pub plan: Vec<PlanStep>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PlanStatus {
     pub solver: String,
     pub total_cost: f64,
-    pub plan: Vec<PlanStep>,
+    pub plan :Vec<RobotPlan>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -56,13 +64,17 @@ pub struct BatteryConstraint {
     pub remaining_distance: f64,
 }
 
+struct RobotState {
+    battery_constraint: Option<BatteryConstraint>,
+    current_location: Option<Location>,
+}
 struct PlanApp {
     _mqtt_client: paho_mqtt::Client,
     mqtt_receiver: Receiver<Option<paho_mqtt::Message>>,
-    battery_constraint: Option<BatteryConstraint>,
-    waypoints: Option<Vec<Location>>,
-    current_location: Option<Location>,
-    status: Option<Status>,
+    robots :Vec<RobotState>,
+    waypoints: Option<Vec<(Location, Instant)>>,
+    current_plan: Option<PlanStatus>,
+    previous_plan: Option<PlanStatus>,
 }
 
 fn draw_arrow(ui: &mut egui::plot::PlotUi, from: Option<&Pose>, to: &Pose) {
@@ -83,22 +95,22 @@ impl PlanApp {
         while let Ok(Some(msg)) = self.mqtt_receiver.try_recv() {
             println!("topic {} payload {}", msg.topic(), msg.payload_str());
             match msg.topic() {
-                "isar/william/pose" => {
-                    let json =
-                        serde_json::from_str::<serde_json::Value>(&msg.payload_str()).unwrap();
-                    let pose_json = json.as_object().unwrap().get("pose").unwrap().clone();
+                // "isar/william/pose" => {
+                //     let json =
+                //         serde_json::from_str::<serde_json::Value>(&msg.payload_str()).unwrap();
+                //     let pose_json = json.as_object().unwrap().get("pose").unwrap().clone();
 
-                    self.current_location = Some(Location {
-                        name: "current_location".to_string(),
-                        pose: serde_json::from_value(pose_json).unwrap(),
-                    });
-                }
+                //     self.current_location = Some(Location {
+                //         name: "current_location".to_string(),
+                //         pose: serde_json::from_value(pose_json).unwrap(),
+                //     });
+                // }
                 "planner/battery_constraint" => {
                     self.battery_constraint =
                         Some(serde_json::from_str(&msg.payload_str()).unwrap());
                 }
                 "planner/status" => {
-                    self.status = Some(serde_json::from_str(&msg.payload_str()).unwrap());
+                    self.current_plan = Some(serde_json::from_str(&msg.payload_str()).unwrap());
                 }
                 "planner/waypoints" => {
                     self.waypoints = Some(serde_json::from_str(&msg.payload_str()).unwrap());
@@ -141,7 +153,7 @@ impl PlanApp {
                         ui.label(format!("Location unknown"));
                     }
 
-                    if let Some(status) = &self.status {
+                    if let Some(status) = &self.current_plan {
                         ui.label(format!("Solver: {}", &status.solver));
                         ui.label(format!("Plan cost: {:.2}", &status.total_cost));
                         ui.label(format!("Plan steps: {}", &status.plan.len()));
@@ -225,7 +237,7 @@ impl PlanApp {
                 // }
 
                 // Plan arrows
-                if let Some(status) = self.status.as_ref() {
+                if let Some(status) = self.current_plan.as_ref() {
                     let mut prev_loc = None; //self.current_location.as_ref().map(|x| &x.pose);
 
                     for item in status.plan.iter() {
@@ -286,7 +298,7 @@ fn main() {
         mqtt_receiver,
         battery_constraint: None,
         waypoints: None,
-        status: None,
+        current_plan: None,
         current_location: None,
     };
 

@@ -22,11 +22,17 @@ class Location:
     pose: Pose
 
 
+
 @dataclass
 class BatteryConstraint:
     charger_location: Location
     battery_distance: float
     remaining_distance: float
+
+@dataclass
+class RobotState:
+    current_location :Location
+    battery_constraint :BatteryConstraint
 
 
 def calculate_distance(wp1: Location, wp2: Location) -> float:
@@ -50,3 +56,4 @@ class Status:
     solver: str
     total_cost: float
     plan: List[PlanStep]
+
