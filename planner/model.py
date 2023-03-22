@@ -44,6 +44,18 @@ def calculate_distance(wp1: Location, wp2: Location) -> float:
     dz = p2.z - p1.z
     return math.sqrt(dx * dx + dy * dy + dz * dz)
 
+def calculate_line(wp1: Location,wp2: Location,steps: int) -> List[Location]:
+    p1 = wp1.pose.position
+    p2 = wp2.pose.position
+    dx = p2.x - p1.x
+    dy = p2.y - p1.y
+    dz = p2.z - p1.z
+    wps = [wp1]*steps
+    for ii in range(steps):
+        wps[ii].x += dx/steps 
+        wps[ii].y += dy/steps
+        wps[ii].z += dz/steps
+    return wps
 
 @dataclass
 class PlanStep:
