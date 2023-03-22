@@ -50,11 +50,25 @@ def calculate_line(wp1: Location,wp2: Location,steps: int) -> List[Location]:
     dx = p2.x - p1.x
     dy = p2.y - p1.y
     dz = p2.z - p1.z
+    o1 = wp1.pose.orientation
+    o2 = wp2.pose.orientation
+    dox = o2.x - o1.x
+    doy = o2.y - o1.x
+    doz = o2.z - o1.z
+    dow = o2.w - o1.w
     wps = [wp1]*steps
     for ii in range(steps):
-        wps[ii].x += dx/steps 
-        wps[ii].y += dy/steps
-        wps[ii].z += dz/steps
+        wps[ii].pose.position.x += (ii+1)*dx/steps 
+        wps[ii].pose.position.y += (ii+1)*dy/steps
+        wps[ii].pose.position.z += (ii+1)*dz/steps
+        wps[ii].pose.orientation.x += (ii+1)*dox/steps
+        wps[ii].pose.orientation.y += (ii+1)*doy/steps
+        wps[ii].pose.orientation.z += (ii+1)*doz/steps
+        wps[ii].pose.orientation.w += (ii+1)*dow/steps
+        if wps[ii].pose == wp2.pose:
+            wps[ii].name = wp2.name
+        else:
+            wps[ii].name = wp1.name + "->" + wp2.name
     return wps
 
 @dataclass

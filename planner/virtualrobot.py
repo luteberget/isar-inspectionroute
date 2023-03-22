@@ -38,5 +38,5 @@ class VirtualRobot(RobotBase):
             self.wp_step = self.wp_step+1
             if len(self.waypoints) > self.wp_step:
                 self.next_wps = calculate_line(self.current_state.location,self.waypoints[self.wp_step](1),self.step_n)
-                     
+        
         return self.current_state
