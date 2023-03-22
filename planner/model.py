@@ -69,3 +69,10 @@ class Status:
     total_cost: float
     plan: List[PlanStep]
 
+
+
+def loc_string(location: Location):
+    "Convert a location JSON message into a short string."
+    if location is None:
+        return "None"
+    return f"Loc({location.name},{location.pose.position.x},{location.pose.position.y},{location.pose.position.z})"

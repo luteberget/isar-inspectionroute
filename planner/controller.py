@@ -1,14 +1,11 @@
-import math
 import json
-import argparse
 import requests
 import time
 
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
+from isarrobot import ISARRobot
 
-
-import robplanpoints
 from model import (
     BatteryConstraint,
     Location,
@@ -17,119 +14,44 @@ from model import (
     calculate_distance,
     json_dumps_dataclass,
 )
-from greedy import greedy_sequence
-from vrp import optimize_waypoint_seq
-from set_battery import override_battery_level_topic
+from planner_greedy import greedy_sequence
+from robotbase import RobotBase
+from planner_vrp import optimize_waypoint_seq
 
-all_locations = list(
-    map(lambda args: Location(*args), robplanpoints.predefined_poses.items())
-)
-
-charger_location = robplanpoints.robot_charger_pose
-
-
-def loc_string(location: Location):
-    "Convert a location JSON message into a short string."
-    if location is None:
-        return "None"
-    return f"Loc({location.name},{location.pose.position.x},{location.pose.position.y},{location.pose.position.z})"
-
-
-@dataclass
-class GreedyPlannerParameters:
-    "Parameters for setting up the connections of the greedy planner."
-    isar_url: str
-    robot_name: str
-    mqtt_host: str
-    mqtt_port: int
-    delay_adding_waypoints: int
-    planner_fn: Any
-    planner_name: str
-
-
-def parse_parameters() -> Tuple[GreedyPlannerParameters, List[Location]]:
-    "Parse command line arguments for the greedy planner"
-
-    parser = argparse.ArgumentParser(
-        description="Simple greedy waypoint planner for ISAR robot."
-    )
-
-    parser.add_argument(
-        "--isar-url",
-        metavar="ISARADDR",
-        help="The base URL for the ISAR API.",
-        required=True,
-    )
-
-    parser.add_argument(
-        "--isar-robot-name",
-        metavar="NAME",
-        help="The robot name used to receive messages from ISAR.",
-        default="R2-D2",
-    )
-
-    parser.add_argument(
-        "--mqtt-hostname",
-        metavar="ADDR",
-        help="The hostname used for connecting to MQTT.",
-        default="localhost",
-    )
-
-    parser.add_argument(
-        "--mqtt-port",
-        metavar="PORT",
-        help="The port used for connecting to MQTT.",
-        default=1883,
-        type=int,
-    )
-
-    parser.add_argument(
-        "--delay-adding",
-        metavar="DELAY",
-        help="Add waypoints one by one with this delay.",
-        default=10,
-        type=int,
-    )
-
-    parser.add_argument(
-        "--vrp",
-        help="Use VRP planner for sequencing and battery constraints.",
-        action="store_true",
-    )
-
-    args = parser.parse_args()
-    print(f"args {args}")
-
-    planner_fn = greedy_sequence
-    planner_name = "greedy"
-    if args.vrp:
-        planner_fn = optimize_waypoint_seq
-        planner_name = "vrpy"
-
-    params = GreedyPlannerParameters(
-        args.isar_url,
-        args.isar_robot_name,
-        args.mqtt_hostname,
-        args.mqtt_port,
-        args.delay_adding,
-        planner_fn,
-        planner_name,
-    )
-
-    return params, all_locations
+class VirtualRobot:
+    pass
 
 
 class Controller:
     waypoints: List[Tuple[int, Location]] = []
-    plan_dirty: bool = False
-    params: GreedyPlannerParameters
+    robots :List[RobotBase] = []
     last_status_message: Optional[str] = None
 
+    def __init__(self, configuration):
+        print("Loading configuration:", json.dumps(configuration, indent=2))
 
-    def __init__(self, params: GreedyPlannerParameters):
-        self.params = params
+        if configuration["planner"] == "greedy":
+            self.planner_fn = greedy_sequence
+        elif configuration["planner"] == "vrp":
+            raise Exception()
+        else:
+            raise Exception()
+        
+        for robot_configuration in configuration["robots"]:
+            if robot_configuration["type"] == "isar":
+                self.robots.append(ISARRobot(robot_configuration))
+            elif robot_configuration["type"] == "virtual":
+                self.robots.append(VirtualRobot(robot_configuration))
+
         self.publish_waypoints()
         self.publish_plan(0.0, [])
+
+    def main_loop(self):
+        while True:
+            time.sleep(0.1)
+            robot_states = [robot.get_state() for robot in self.robots]
+            if not self.is_plan_valid(robot_states):
+                self.update_plan()
 
     def add_waypoint_fn(self):
         counter = 0
@@ -278,42 +200,8 @@ class Controller:
             self.plan_dirty = True
 
 
-#
-# Initialize the planner state.
-#
-
-
-params, locations_to_add = parse_parameters()
-planner = PlannerState(params)
-
-#
-# Planner loop
-#
-
-previous_added_waypoint_time = time.time()
-add_fn = planner.add_waypoint_fn()
-if params.delay_adding_waypoints == 0:
-    while len(locations_to_add) > 0:
-        add_fn(locations_to_add.pop(0))
-        previous_added_waypoint_time = time.time()
-
-while True:
-    #status = f"Robot status: ready={planner.robot_is_idle} loc={loc_string(planner.robot_current_location)}. "
-    status = f"Robot status: ready={planner.robot_is_idle}. "
-
-    if (
-        time.time() - previous_added_waypoint_time >= params.delay_adding_waypoints
-        and len(locations_to_add) > 0
-    ):
-        add_fn(locations_to_add.pop(0))
-        previous_added_waypoint_time = time.time()
-
-    if not planner.plan_dirty:
-        status += "No new information to process."
-    else:
-        print("Replanning.")
-        planner.plan_and_start_mission()
-        planner.plan_dirty = False
-
-    planner.set_status(status)
-    time.sleep(0.1)
+if __name__ == "__main__":
+    with open("configuration.json") as f:
+        configuration = json.loads(f)
+    controller = Controller(configuration)
+    controller.main_loop()
