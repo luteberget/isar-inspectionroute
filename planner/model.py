@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import List
 from alitra import Pose
 from dataclasses import dataclass
@@ -21,6 +22,13 @@ class Location:
     name: str
     pose: Pose
 
+WaypointStatus = Enum("WaypointStatus", ["PENDING","SUCCESS","FAILURE"])
+
+@dataclass
+class Waypoint:
+    status: WaypointStatus
+    is_charger :bool
+    location :Location
 
 
 @dataclass
@@ -81,8 +89,7 @@ class PlanStep:
 class Status:
     solver: str
     total_cost: float
-    plan: List[PlanStep]
-
+    plan: List[List[PlanStep]]
 
 
 def loc_string(location: Location):
@@ -90,3 +97,27 @@ def loc_string(location: Location):
     if location is None:
         return "None"
     return f"Loc({location.name},{location.pose.position.x},{location.pose.position.y},{location.pose.position.z})"
+
+
+def integrate_robot_plan(state :RobotState, wp_sequence: List[Location]):
+        cost = 0
+        battery = state.battery_constraint.remaining_distance
+        prev_loc = state.current_location
+        plan = []
+
+        for loc in wp_sequence:
+            d = calculate_distance(prev_loc, loc)
+            cost += d
+            battery -= d
+            if battery < 0.05:
+                print(
+                    "Warning: less than 5 percent battery",
+                    battery,
+                    "at",
+                    loc_string(loc),
+                )
+            plan.append(PlanStep(loc, battery))
+            if loc.is_charger:
+                battery = state.battery_constraint.battery_distance
+            prev_loc = loc
+        return cost, plan

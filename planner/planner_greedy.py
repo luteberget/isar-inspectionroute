@@ -1,28 +1,36 @@
 from typing import List, Tuple
-from model import BatteryConstraint, Location, calculate_distance
+from model import RobotState, Waypoint, WaypointStatus, calculate_distance
 
 def greedy_sequence(
-    loc: List[Tuple[Location, BatteryConstraint]], wps: List[Tuple[int, Location]],
-) -> List[List[Tuple[int, Location]]]:
-    
-    # TODO extend to multi-robot 
+    robots: List[RobotState], 
+    waypoints :List[Waypoint]
+) -> List[List[int]]:
+    """Greedily assign the closest waypoints to the robot with the least travelled distance"""
+    # NOTE: Does not respect the battery constraint.
 
-    # """Sequence the waypoints, starting from the initial location `loc`.
-    # If the initial location is not given, the first waypoint is used as the current location.
-    # Returns a permutation of `wps` by greedily selecting the closest point from the previous location."""
+    remaining_waypoints = [i for i,w in enumerate(waypoints) if w.status == WaypointStatus.PENDING]
 
-    # # NOTE battery constraint is ignored
+    plan = [[] for _ in robots]
+    robot_locs = [r.current_location for r in robots]
+    robot_travel = [0 for _ in robots]
 
-    # xs = []
-    # if loc is None and len(wps) > 0:
-    #     xs.append(wps.pop(0))
-    #     loc = xs[-1][1]
+    # The robot that has travelled the shortest gets its closest waypoint added.
 
-    # while len(wps) > 0:
-    #     next_location = min(wps, key=lambda wp: calculate_distance(loc, wp[1]))
-    #     wps.remove(next_location)
-    #     xs.append(next_location)
-    #     loc = xs[-1][1]
+    while len(remaining_waypoints) > 0:
 
-    # print("Greedy sequence ", xs)
-    # return xs
+        # Find the robot that has travelled the shortest
+        robot = min(range(len(robots)), key=lambda r: robot_travel[r])
+
+        # Find the shortest waypoint to the robot
+        selected_wp = min( remaining_waypoints, key=lambda wp: calculate_distance(robot_locs[robot], waypoints[wp].location))
+
+        # Move waypoint from remaining_waypoint to the plan
+        plan[robot].append(selected_wp)
+        remaining_waypoints.remove(selected_wp)
+
+        # Move robot's hypothetical location
+        robot_travel += calculate_distance(robot_locs[robot], waypoints[selected_wp].location)
+        robot_locs[robot] = waypoints[selected_wp].location
+
+
+    return plan
