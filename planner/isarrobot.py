@@ -90,6 +90,49 @@ class ISARRobot(RobotBase):
             self.robot_battery_level * robplanpoints.robot_battery_distance,
         )
 
+    def send_plan(sefl):
+        # Send the sequence as a mission to ISAR.
+        tasks = list(
+            map(lambda wp: convert_task_isar(f"wp{wp[0]}", wp[1]), wp_sequence)
+        )
+        mission = {
+            "mission_definition": {
+                "tasks": tasks,
+            }
+        }
+
+        url = urljoin(self.params.isar_url, "schedule/start-mission")
+        print(f"Sending ISAR command ({url}) to go to: {mission}")
+        req = requests.post(url, json=mission)
+        response = req.json()
+        print(f"Result: {req} {response}")
+
+        # Store the correspondence between tasks and waypoints, so we
+        # can check which waypoints have been successfully visited.
+        if req.ok:
+            self.current_mission_id = response["id"]
+            self.current_mission_tasks = [
+                (wp[0], task_data["id"])
+                for task_data, wp in zip(response["tasks"], wp_sequence)
+            ]
+            print(
+                "Current mission",
+                self.current_mission_id,
+                "tasks",
+                self.current_mission_tasks,
+            )
+            self.robot_is_idle = False
+
+            # Send the current plan over MQTT
+            self.current_wp_seq = wp_sequence
+            cost, self.current_plan = self.integrate_plan(wp_sequence)
+            self.publish_plan(cost, self.current_plan)
+
+            return True
+        else:
+            print("Warning: ISAR command failed", response)
+            return False
+
 
     def cancel_current_mission(self):
         # First, cancel existing mission

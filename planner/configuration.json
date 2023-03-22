@@ -1,5 +1,7 @@
 {
     "planner": "greedy",
+    "mqtt-hostname": "localhost",
+    "mqtt-port": null,
     "robots": [
         {
             "type": "isar",

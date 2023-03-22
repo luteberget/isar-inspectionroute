@@ -1,147 +1,129 @@
 import json
-import requests
 import time
 
-from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import List, Optional
 from isarrobot import ISARRobot
 
 from model import (
-    BatteryConstraint,
-    Location,
-    PlanStep,
+    RobotState,
     Status,
-    calculate_distance,
+    Waypoint,
+    WaypointStatus,
+    integrate_robot_plan,
     json_dumps_dataclass,
 )
+
 from planner_greedy import greedy_sequence
 from robotbase import RobotBase
-from planner_vrp import optimize_waypoint_seq
 
 class VirtualRobot:
     pass
 
 
 class Controller:
-    waypoints: List[Tuple[int, Location]] = []
+    waypoints: List[Waypoint] = []
     robots :List[RobotBase] = []
     last_status_message: Optional[str] = None
+    current_plan_progress :List[int] = []
+    current_plan :List[List[int]] = []
+    current_plan_version :int = 0
 
     def __init__(self, configuration):
         print("Loading configuration:", json.dumps(configuration, indent=2))
 
+        self.planner_name = configuration["planner"]
         if configuration["planner"] == "greedy":
             self.planner_fn = greedy_sequence
         elif configuration["planner"] == "vrp":
-            raise Exception()
+            raise Exception("not implemented")
         else:
-            raise Exception()
+            raise Exception("unknown planner")
         
         for robot_configuration in configuration["robots"]:
             if robot_configuration["type"] == "isar":
                 self.robots.append(ISARRobot(robot_configuration))
             elif robot_configuration["type"] == "virtual":
                 self.robots.append(VirtualRobot(robot_configuration))
+            else:
+                raise Exception("Unknown robot type")
+            
+            self.current_plan.append([])
+            self.current_plan_progress.append(0)
 
         self.publish_waypoints()
         self.publish_plan(0.0, [])
 
+    def robot_ready(self, state :RobotState):
+        return state.current_location is not None
+
     def main_loop(self):
         while True:
-            time.sleep(0.1)
             robot_states = [robot.get_state() for robot in self.robots]
-            if not self.is_plan_valid(robot_states):
-                self.update_plan()
+            self.publish_plan(robot_states)
 
-    def add_waypoint_fn(self):
-        counter = 0
+            self.updates_from_robot_events()
 
-        def f(wp):
-            nonlocal counter
-            print(f"Received waypoint {loc_string(wp)}.")
-            self.waypoints.append((counter, wp))
-            self.plan_dirty = True
-            self.publish_waypoints()
-            counter += 1
-
-        return f
-
-
-    def plan_and_start_mission(self):
-        while True:
-            self.cancel_current_mission()
-
-            ok = self.try_plan_and_start_mission()
-            if ok:
-                break
+            if not all(self.robot_ready(s) for s in robot_states):
+                self.set_status("Waiting for robot state information.")
             else:
-                print("Failed to set mission plan. Retrying in 1 sec...")
-                time.sleep(1)
+                plan_flaw = self.is_plan_valid(robot_states)
+                if plan_flaw is not None:
+                    self.log_msg("Updating plan because of flaw: " + plan_flaw)
+                    self.update_plan(robot_states)
+                    self.publish_plan(robot_states)
 
+            time.sleep(0.5)
 
-    def try_plan_and_start_mission(self):
-        # If we haven't received the robot's starting location yet
-        if self.robot_current_location is None:
-            print("Cannot set plan before knowing where the robot is located.")
-            return False
+    def updates_from_robot_events(self):
+        for robot in self.robots:
+            for task_status in robot.get_event():
+                if task_status.waypoint >= len(self.waypoints):
+                    self.log_msg(f"WARNING: unknown waypoint id {task_status.waypoint}") 
+                    continue
+                    
+                    # Mark the waypoint in the waypoint list.
+                if task_status.success:
+                    self.log_msg(f"Successfully inspected waypoint {task_status.waypoint}")
+                    self.waypoints[task_status.waypoint].status = WaypointStatus.SUCCESS
+                else:
+                    self.log_msg(f"Failed to inspected waypoint {task_status.waypoint}")
+                    self.waypoints[task_status.waypoint].status = WaypointStatus.FAILURE
 
-        if not self.robot_is_idle:
-            print("The robot is not idle, cannot receive misson.")
-            return False
+                    # Update the progress of the robot.
+                for robot_idx in range(len(self.robots)):
+                    robot_plan = self.current_plan[robot_idx]
+                    if task_status.waypoint in robot_plan:
+                        plan_idx = robot_plan.index(task_status.waypoint)
+                        progress = self.current_plan_progress[robot_idx]
+                        if plan_idx != progress:
+                            self.log_msg(f"Warning: robot finished task that was not the first planned.")
+                            robot_plan[plan_idx], robot_plan[progress] = robot_plan[progress], robot_plan[plan_idx]
+                            
+                        self.current_plan_progress[robot_idx] += 1
 
-        # Sequence the waypoints
-        battery_constraint = self.get_battery_constraint()
-        print(battery_constraint)
-        if battery_constraint is not None:
-            self.publish_battery_constraint(battery_constraint)
+    def log_msg(self, msg):
+        self._mqtt_client.publish("planner/message", msg, retain=False)
+        print(msg)
 
-        wp_sequence = self.params.planner_fn(
-            self.robot_current_location,
-            [x for x in self.waypoints],
-            battery_constraint,
-        )
+    def is_plan_valid(self, robot_states :List[RobotState]):
+        pending_waypoints = frozenset((i for i,wp in enumerate(self.waypoints) if wp.status == WaypointStatus.PENDING))
+        planned_waypoints = frozenset((i for robot_plan in self.current_plan for i in robot_plan))
+        
+        if pending_waypoints != planned_waypoints:
+            return "New waypoint added."
 
-        # Send the sequence as a mission to ISAR.
-        tasks = list(
-            map(lambda wp: convert_task_isar(f"wp{wp[0]}", wp[1]), wp_sequence)
-        )
-        mission = {
-            "mission_definition": {
-                "tasks": tasks,
-            }
-        }
+        _,plan = self.integrate_plan(robot_states)
+        if min((x.remaining_battery for r in plan for x in r), default=1.0) < 0.0:
+            return("Not enough battery to finish plan.")
 
-        url = urljoin(self.params.isar_url, "schedule/start-mission")
-        print(f"Sending ISAR command ({url}) to go to: {mission}")
-        req = requests.post(url, json=mission)
-        response = req.json()
-        print(f"Result: {req} {response}")
+        # Plan is valid.
+        return None
 
-        # Store the correspondence between tasks and waypoints, so we
-        # can check which waypoints have been successfully visited.
-        if req.ok:
-            self.current_mission_id = response["id"]
-            self.current_mission_tasks = [
-                (wp[0], task_data["id"])
-                for task_data, wp in zip(response["tasks"], wp_sequence)
-            ]
-            print(
-                "Current mission",
-                self.current_mission_id,
-                "tasks",
-                self.current_mission_tasks,
-            )
-            self.robot_is_idle = False
-
-            # Send the current plan over MQTT
-            self.current_wp_seq = wp_sequence
-            cost, self.current_plan = self.integrate_plan(wp_sequence)
-            self.publish_plan(cost, self.current_plan)
-
-            return True
-        else:
-            print("Warning: ISAR command failed", response)
-            return False
+    def update_plan(self, robot_states :List[RobotState]):
+        new_plan = self.planner_fn(robot_states, self.waypoints)
+        self.current_plan = new_plan
+        self.current_plan_progress = [0 for _ in new_plan]
+        self.current_plan_version += 1
 
     def set_status(self, s):
         if self.last_status_message == s:
@@ -149,55 +131,28 @@ class Controller:
         self.last_status_message = s
         print("Status: ", s)
 
-    def publish_plan(self, cost: float, plan: List[PlanStep]):
-        planner = self.params.planner_name if len(plan) > 0 else "none"
-        status = Status(planner, cost, plan)
+    def publish_plan(self, robot_states :List[RobotState]):
+        total_cost, combined_plan = self.integrate_plan(robot_states)
+        status = Status(self.planner_name, total_cost, combined_plan)
         json_output = json_dumps_dataclass(status)
-        self._mqtt_client.publish("planner/status", json_output, retain=True)
+        self._mqtt_client.publish("planner/plan", json_output, retain=True)
+
+    def integrate_plan(self, robot_states):
+        total_cost = 0.0
+        combined_plan = []
+        for robot_state, robot_plan, start_idx in zip(robot_states, self.current_plan, self.current_plan_progress):
+            cost, plan = integrate_robot_plan(robot_state, [self.waypoints[i].location for i in robot_plan[start_idx:]])
+            total_cost += cost
+            combined_plan.append(plan)
+        return total_cost,combined_plan
 
     def publish_waypoints(self):
-        json_output = json_dumps_dataclass([ x for _,x in self.waypoints])
-        print("write waypoints", json_output)
+        json_output = json_dumps_dataclass(self.waypoints)
         self._mqtt_client.publish("planner/waypoints", json_output, retain=True)
 
-    def publish_battery_constraint(self, battery_constraint :BatteryConstraint):
-        json_output = json_dumps_dataclass(battery_constraint)
-        print("write battery constraint", json_output);
-        self._mqtt_client.publish("planner/battery_constraint", json_output, retain=True)
-
-    def integrate_plan(self, wp_sequence: List[Tuple[int, Location]]):
-        cost = 0
-        battery = self.robot_battery_level * robplanpoints.robot_battery_distance
-        prev_loc = self.robot_current_location
-        plan = []
-
-        for x, loc in wp_sequence:
-            d = calculate_distance(prev_loc, loc)
-            cost += d
-            battery -= d
-            if battery < 0.05:
-                print(
-                    "Warning: less than 5 percent battery",
-                    battery,
-                    "at",
-                    loc_string(loc),
-                )
-            plan.append(PlanStep(loc, battery))
-            if x == "charger":
-                battery = robplanpoints.robot_battery_distance
-            prev_loc = loc
-        return cost, plan
-
-    def check_plan_battery(self):
-        if self.current_wp_seq is None:
-            return
-
-        _cost, plan = self.integrate_plan(self.current_wp_seq)
-        if min([x.remaining_battery for x in plan], default=1.0) < 0.0:
-            print(
-                "Battery level changed and the plan is not battery positive. Replanning."
-            )
-            self.plan_dirty = True
+    def publish_robot_states(self, states :List[RobotState]):
+        json_output = json_dumps_dataclass(states)
+        self._mqtt_client.publish("planner/robots", json_output, retain=True)
 
 
 if __name__ == "__main__":
