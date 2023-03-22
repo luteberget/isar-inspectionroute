@@ -14,9 +14,9 @@ from model import (
     calculate_distance,
     json_dumps_dataclass,
 )
-from greedy import greedy_sequence
+from planner_greedy import greedy_sequence
 from robotbase import RobotBase
-from vrp import optimize_waypoint_seq
+from planner_vrp import optimize_waypoint_seq
 
 class VirtualRobot:
     pass
