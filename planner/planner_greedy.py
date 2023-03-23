@@ -1,10 +1,10 @@
 from typing import List, Tuple
-from model import RobotState, Waypoint, WaypointStatus, calculate_distance
+from model import RobotState, Waypoint, WaypointID, WaypointStatus, calculate_distance
 
 def greedy_sequence(
     robots: List[RobotState], 
     waypoints :List[Waypoint]
-) -> List[List[int]]:
+) -> List[List[WaypointID]]:
     """Greedily assign the closest waypoints to the robot with the least travelled distance"""
     # NOTE: Does not respect the battery constraint.
 
@@ -29,7 +29,7 @@ def greedy_sequence(
         remaining_waypoints.remove(selected_wp)
 
         # Move robot's hypothetical location
-        robot_travel += calculate_distance(robot_locs[robot], waypoints[selected_wp].location)
+        robot_travel[robot] += calculate_distance(robot_locs[robot], waypoints[selected_wp].location)
         robot_locs[robot] = waypoints[selected_wp].location
 
 

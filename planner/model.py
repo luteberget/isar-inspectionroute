@@ -1,9 +1,14 @@
 from enum import Enum
 from typing import List
-from alitra import Pose
+from alitra import Pose, Position, Orientation
 from dataclasses import dataclass
 import math
 import dataclasses, json
+
+mqtt_planner_add_waypoint_topic: str = "planner/add_waypoint"
+
+
+WaypointID = int
 
 
 class DataclassJSONEncoder(json.JSONEncoder):
@@ -22,13 +27,15 @@ class Location:
     name: str
     pose: Pose
 
-WaypointStatus = Enum("WaypointStatus", ["PENDING","SUCCESS","FAILURE"])
+
+WaypointStatus = Enum("WaypointStatus", ["PENDING", "SUCCESS", "FAILURE"])
+
 
 @dataclass
 class Waypoint:
     status: WaypointStatus
-    is_charger :bool
-    location :Location
+    is_charger: bool
+    location: Location
 
 
 @dataclass
@@ -37,10 +44,19 @@ class BatteryConstraint:
     battery_distance: float
     remaining_distance: float
 
+
 @dataclass
 class RobotState:
-    current_location :Location
-    battery_constraint :BatteryConstraint
+    current_location: Location
+    battery_constraint: BatteryConstraint | None
+
+
+def mk_pose(x, y, z=0.0) -> Pose:
+    return Pose(
+        position=Position(x, y, z, 0.0),
+        orientation=Orientation(0, 0, 0, 1, frame=None),
+        frame=None,
+    )
 
 
 def calculate_distance(wp1: Location, wp2: Location) -> float:
@@ -52,7 +68,8 @@ def calculate_distance(wp1: Location, wp2: Location) -> float:
     dz = p2.z - p1.z
     return math.sqrt(dx * dx + dy * dy + dz * dz)
 
-def calculate_line(wp1: Location,wp2: Location,steps: int) -> List[Location]:
+
+def calculate_line(wp1: Location, wp2: Location, steps: int) -> List[Location]:
     p1 = wp1.pose.position
     p2 = wp2.pose.position
     dx = p2.x - p1.x
@@ -64,20 +81,21 @@ def calculate_line(wp1: Location,wp2: Location,steps: int) -> List[Location]:
     doy = o2.y - o1.x
     doz = o2.z - o1.z
     dow = o2.w - o1.w
-    wps = [wp1]*steps
+    wps = [wp1] * steps
     for ii in range(steps):
-        wps[ii].pose.position.x += (ii+1)*dx/steps 
-        wps[ii].pose.position.y += (ii+1)*dy/steps
-        wps[ii].pose.position.z += (ii+1)*dz/steps
-        wps[ii].pose.orientation.x += (ii+1)*dox/steps
-        wps[ii].pose.orientation.y += (ii+1)*doy/steps
-        wps[ii].pose.orientation.z += (ii+1)*doz/steps
-        wps[ii].pose.orientation.w += (ii+1)*dow/steps
+        wps[ii].pose.position.x += (ii + 1) * dx / steps
+        wps[ii].pose.position.y += (ii + 1) * dy / steps
+        wps[ii].pose.position.z += (ii + 1) * dz / steps
+        wps[ii].pose.orientation.x += (ii + 1) * dox / steps
+        wps[ii].pose.orientation.y += (ii + 1) * doy / steps
+        wps[ii].pose.orientation.z += (ii + 1) * doz / steps
+        wps[ii].pose.orientation.w += (ii + 1) * dow / steps
         if wps[ii].pose == wp2.pose:
             wps[ii].name = wp2.name
         else:
             wps[ii].name = wp1.name + "->" + wp2.name
     return wps
+
 
 @dataclass
 class PlanStep:
@@ -99,25 +117,27 @@ def loc_string(location: Location):
     return f"Loc({location.name},{location.pose.position.x},{location.pose.position.y},{location.pose.position.z})"
 
 
-def integrate_robot_plan(state :RobotState, wp_sequence: List[Location]):
-        cost = 0
+def integrate_robot_plan(state: RobotState, wp_sequence: List[Waypoint]):
+    cost = 0
+    battery = float("inf")
+    if state.battery_constraint is not None:
         battery = state.battery_constraint.remaining_distance
-        prev_loc = state.current_location
-        plan = []
+    prev_loc = state.current_location
+    plan = []
 
-        for loc in wp_sequence:
-            d = calculate_distance(prev_loc, loc)
-            cost += d
-            battery -= d
-            if battery < 0.05:
-                print(
-                    "Warning: less than 5 percent battery",
-                    battery,
-                    "at",
-                    loc_string(loc),
-                )
-            plan.append(PlanStep(loc, battery))
-            if loc.is_charger:
-                battery = state.battery_constraint.battery_distance
-            prev_loc = loc
-        return cost, plan
+    for wp in wp_sequence:
+        d = calculate_distance(prev_loc, wp.location)
+        cost += d
+        battery -= d
+        if battery < 0.05:
+            print(
+                "Warning: less than 5 percent battery",
+                battery,
+                "at",
+                loc_string(wp.location),
+            )
+        plan.append(PlanStep(wp.location, battery))
+        if wp.is_charger:
+            battery = state.battery_constraint.battery_distance
+        prev_loc = wp.location
+    return cost, plan

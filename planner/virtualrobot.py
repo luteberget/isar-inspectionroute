@@ -1,8 +1,7 @@
 
-
 from typing import List, Tuple
 from alitra import Pose,Position,Orientation
-from model import Location, RobotState, calculate_distance,calculate_line,BatteryConstraint
+from model import Location, RobotState, calculate_distance,calculate_line,BatteryConstraint, mk_pose
 from robotbase import RobotBase, TaskStatus
 from datetime import datetime
    
@@ -48,7 +47,7 @@ class VirtualRobot(RobotBase):
                 self.next_wps = calculate_line(self.current_state.location,self.waypoints[self.wp_step](1),self.step_n)
         else:
             # moving towards goal
-            self.next_location = 
+            self.next_location = 0
             distance = calculate_distance(self.current_state.location,self.next_wps[0])
             self.current_state.location = self.next_wps[0]
             self.next_wps.pop(0)

@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Tuple
 
-from model import Location, RobotState
+from model import Location, RobotState, WaypointID
 
 @dataclass
 class TaskStatus:
@@ -12,7 +12,7 @@ class TaskStatus:
 
 class RobotBase(ABC):
     @abstractmethod
-    def set_plan(self,waypoints :List[Tuple[int, Location]]):
+    def set_plan(waypoints :List[Tuple[WaypointID, Location]]):
         pass
 
     @abstractmethod

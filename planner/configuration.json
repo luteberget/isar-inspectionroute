@@ -2,6 +2,7 @@
     "planner": "greedy",
     "mqtt-hostname": "localhost",
     "mqtt-port": null,
+    "autoload-waypoints": true,
     "robots": [
         {
             "type": "isar",
