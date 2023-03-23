@@ -2,7 +2,8 @@ import json
 import time
 
 from typing import List, Optional
-from isarrobot import ISARRobot
+#from isarrobot import ISARRobot
+import paho.mqtt.client as mqtt
 
 from model import (
     RobotState,
@@ -15,9 +16,7 @@ from model import (
 
 from planner_greedy import greedy_sequence
 from robotbase import RobotBase
-
-class VirtualRobot:
-    pass
+from virtualrobot import VirtualRobot
 
 
 class Controller:
@@ -27,10 +26,11 @@ class Controller:
     current_plan_progress :List[int] = []
     current_plan :List[List[int]] = []
     current_plan_version :int = 0
+    _mqtt_client = mqtt.Client("controller")
 
     def __init__(self, configuration):
         print("Loading configuration:", json.dumps(configuration, indent=2))
-
+        self._mqtt_client.connect(configuration["mqtt-hostname"])
         self.planner_name = configuration["planner"]
         if configuration["planner"] == "greedy":
             self.planner_fn = greedy_sequence
@@ -41,7 +41,8 @@ class Controller:
         
         for robot_configuration in configuration["robots"]:
             if robot_configuration["type"] == "isar":
-                self.robots.append(ISARRobot(robot_configuration))
+                #self.robots.append(ISARRobot(robot_configuration))
+                print("not an option right know")
             elif robot_configuration["type"] == "virtual":
                 self.robots.append(VirtualRobot(robot_configuration))
             else:
@@ -51,7 +52,7 @@ class Controller:
             self.current_plan_progress.append(0)
 
         self.publish_waypoints()
-        self.publish_plan(0.0, [])
+        self.publish_plan([])
 
     def robot_ready(self, state :RobotState):
         return state.current_location is not None
@@ -156,7 +157,9 @@ class Controller:
 
 
 if __name__ == "__main__":
-    with open("configuration.json") as f:
-        configuration = json.loads(f)
+    #with open("configuration.json") as f:   
+    with open("configuration_virtual.json") as f:
+        #configuration = json.loads(f)
+        configuration = json.load(f)
     controller = Controller(configuration)
     controller.main_loop()

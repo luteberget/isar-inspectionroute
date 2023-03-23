@@ -4,14 +4,8 @@
     "mqtt-port": null,
     "robots": [
         {
-            "type": "isar",
-            "isar-url": "http://localhost:3000/",
-            "isar-robot-name": "R2-D2",
-            "mqtt-hostname": "localhost",
-            "mqtt-port": null
-        },
-        {
             "type": "virtual",
+            "speed": "1",
             "initial_state":{
                 "location": {
                     "name": "wp0",

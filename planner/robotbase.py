@@ -11,9 +11,8 @@ class TaskStatus:
     success :bool
 
 class RobotBase(ABC):
-
     @abstractmethod
-    def set_plan(waypoints :List[Tuple[int, Location]]):
+    def set_plan(self,waypoints :List[Tuple[int, Location]]):
         pass
 
     @abstractmethod
