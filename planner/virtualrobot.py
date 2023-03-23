@@ -14,9 +14,10 @@ class VirtualRobot(RobotBase):
     rotation_speed = 0 
     time = 0
     events = []
-
+    name = ""
     def __init__(self, robot_config):
         super().__init__()
+        self.name = robot_config["name"]
         init = robot_config["initial_state"]
         pos = init["location"]["position"]
         position = Position(float(pos["x"]),float(pos["y"]),float(pos["z"]),"")

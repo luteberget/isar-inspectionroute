@@ -133,7 +133,7 @@ class Controller:
                     # Mark the waypoint in the waypoint list.
                 if task_status.success:
                     self.log_msg(
-                        f"Successfully inspected waypoint {task_status.waypoint}"
+                        f"Successfully inspected waypoint {task_status.waypoint} with robot {robot.name}"
                     )
                     self.waypoints[task_status.waypoint].status = WaypointStatus.SUCCESS
                 else:
