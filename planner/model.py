@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import math
 import dataclasses, json
 
+WaypointID = int
 
 class DataclassJSONEncoder(json.JSONEncoder):
     def default(self, o):
@@ -40,7 +41,7 @@ class BatteryConstraint:
 @dataclass
 class RobotState:
     current_location :Location
-    battery_constraint :BatteryConstraint
+    battery_constraint :BatteryConstraint | None
 
 
 def calculate_distance(wp1: Location, wp2: Location) -> float:
@@ -101,7 +102,9 @@ def loc_string(location: Location):
 
 def integrate_robot_plan(state :RobotState, wp_sequence: List[Location]):
         cost = 0
-        battery = state.battery_constraint.remaining_distance
+        battery = 1.0
+        if state.battery_constraint is not None:
+            battery = state.battery_constraint.remaining_distance
         prev_loc = state.current_location
         plan = []
 

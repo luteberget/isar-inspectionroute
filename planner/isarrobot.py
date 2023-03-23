@@ -5,10 +5,10 @@ from alitra import Pose
 import alitra
 
 import json
-from typing import Optional
+from typing import List, Optional
 
-from model import Location
-from robotbase import RobotBase
+from model import BatteryConstraint, Location, RobotState
+from robotbase import RobotBase, TaskStatus
 
 
 def convert_pose_isar(location: Location):
@@ -74,6 +74,7 @@ class ISARRobot(RobotBase):
     robot_is_idle: bool = False
     robot_current_location: Optional[Location] = None
     robot_battery_level: float = 1.0
+    configuration = None
     
     current_mission_id = None
     current_mission_tasks = None
@@ -81,13 +82,37 @@ class ISARRobot(RobotBase):
     current_wp_seq = None
     _mqtt_client = None
 
+    charger_location :Location | None = None
+    robot_battery_distance :float = 10000.0
+
+    recent_events = []
+
+    def __init__(self, configuration):
+
+        # TODO parse charger location
+        # TODO get battery distance
+
+        self.configuration = configuration
+        self._init_mqtt_interface()
+        pass
+
+    def get_state(self) -> RobotState:
+        return RobotState(
+            self.robot_current_location,
+            self.get_battery_constraint())
+    
+    def get_event(self) -> List[TaskStatus]:
+        value = self.recent_events
+        self.recent_events = []
+        return value
+
     def get_battery_constraint(self) -> BatteryConstraint | None:
-        if charger_location is None:
+        if self.charger_location is None:
             return None
         return BatteryConstraint(
-            charger_location,
-            robplanpoints.robot_battery_distance,
-            self.robot_battery_level * robplanpoints.robot_battery_distance,
+            self.charger_location,
+            self.robot_battery_distance,
+            self.robot_battery_level * self.robot_battery_distance,
         )
 
     def send_plan(sefl):
@@ -137,7 +162,7 @@ class ISARRobot(RobotBase):
     def cancel_current_mission(self):
         # First, cancel existing mission
         if self.current_mission_id is not None or not self.robot_is_idle:
-            url = urljoin(self.params.isar_url, "schedule/stop-mission")
+            url = urljoin(self.configuration["isar-url"], "schedule/stop-mission")
             req = requests.post(url)
             print(f"Stopped {req}")
             if req.ok:
@@ -150,9 +175,13 @@ class ISARRobot(RobotBase):
                     self.current_mission_tasks = None
     
     def _init_mqtt_interface(self):
-        mqtt_isar_state_topic = f"isar/{self.params.robot_name}/state"
-        mqtt_isar_task_topic = f"isar/{self.params.robot_name}/task"
-        mqtt_isar_robot_location_topic = f"isar/{self.params.robot_name}/pose"
+        hostname = self.configuration["mqtt-hostname"]
+        port = self.configuration["mqtt-port"] or 1883
+        robot_name = self.configuration["isar-robot-name"]
+
+        mqtt_isar_state_topic = f"isar/{robot_name}/state"
+        mqtt_isar_task_topic = f"isar/{robot_name}/task"
+        mqtt_isar_robot_location_topic = f"isar/{robot_name}/pose"
 
         # The callback for when the client receives a CONNACK response from the server.
         def mqtt_connect(client, userdata, flags, rc):
@@ -162,7 +191,9 @@ class ISARRobot(RobotBase):
             client.subscribe(mqtt_isar_state_topic)
             client.subscribe(mqtt_isar_task_topic)
             client.subscribe(mqtt_isar_robot_location_topic)
-            client.subscribe(override_battery_level_topic)
+
+            # TODO override battery
+            # client.subscribe(override_battery_level_topic)
 
         # The callback for when a PUBLISH message is received from the server.
         def mqtt_message(client, userdata, msg):
@@ -181,11 +212,14 @@ class ISARRobot(RobotBase):
                 self.robot_current_location = Location(
                     "current_location", json_to_alitra_pose(loc_msg["pose"])
                 )
-            elif msg.topic == override_battery_level_topic:
-                batt_msg = json.loads(msg.payload)
-                print("Override battery level", batt_msg)
-                self.robot_battery_level = batt_msg["level"]
-                self.check_plan_battery()
+
+            # TODO override battery
+
+            # elif msg.topic == override_battery_level_topic:
+            #     batt_msg = json.loads(msg.payload)
+            #     print("Override battery level", batt_msg)
+            #     self.robot_battery_level = batt_msg["level"]
+            #     self.check_plan_battery()
             elif msg.topic == mqtt_isar_task_topic:
                 task_msg = json.loads(msg.payload)
                 print("Received task message", task_msg)
@@ -211,12 +245,8 @@ class ISARRobot(RobotBase):
         client = mqtt.Client()
         client.on_connect = mqtt_connect
         client.on_message = mqtt_message
-
-        client.connect(self.params.mqtt_host, self.params.mqtt_port, 60)
-
+        client.connect(hostname, port, 60)
         while not client.is_connected():
             client.loop()
-
         client.loop_start()
-
         self._mqtt_client = client

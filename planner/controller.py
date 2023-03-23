@@ -8,6 +8,7 @@ from model import (
     RobotState,
     Status,
     Waypoint,
+    WaypointID,
     WaypointStatus,
     integrate_robot_plan,
     json_dumps_dataclass,
@@ -15,17 +16,14 @@ from model import (
 
 from planner_greedy import greedy_sequence
 from robotbase import RobotBase
-
-class VirtualRobot:
-    pass
-
+from virtualrobot import VirtualRobot
 
 class Controller:
     waypoints: List[Waypoint] = []
     robots :List[RobotBase] = []
     last_status_message: Optional[str] = None
     current_plan_progress :List[int] = []
-    current_plan :List[List[int]] = []
+    current_plan :List[List[WaypointID]] = []
     current_plan_version :int = 0
 
     def __init__(self, configuration):
