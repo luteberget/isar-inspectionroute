@@ -29,7 +29,7 @@ def greedy_sequence(
         remaining_waypoints.remove(selected_wp)
 
         # Move robot's hypothetical location
-        robot_travel += calculate_distance(robot_locs[robot], waypoints[selected_wp].location)
+        robot_travel[robot] += calculate_distance(robot_locs[robot], waypoints[selected_wp].location)
         robot_locs[robot] = waypoints[selected_wp].location
 
 

@@ -2,7 +2,7 @@
 
 from typing import List, Tuple
 
-from model import Location, RobotState, calculate_distance,calculate_line
+from model import Location, RobotState, calculate_distance,calculate_line, mk_pose
 from robotbase import RobotBase, TaskStatus
    
 class VirtualRobot(RobotBase):
