@@ -117,6 +117,8 @@ class Controller:
                 if plan_flaw is not None:
                     self.log_msg("Updating plan because of flaw: " + plan_flaw)
                     self.update_plan(robot_states)
+                    for ii in range(len(self.robots)):
+                        self.robots[ii].set_plan([(id,self.waypoints[id].location) for id in self.current_plan[ii]])
                     self.publish_plan(robot_states)
 
             time.sleep(0.5)
@@ -229,7 +231,7 @@ if __name__ == "__main__":
         configuration = json.load(f)
     controller = Controller(configuration)
 
-    if configuration.get("autoload-waypoints", False):
+    if configuration.get("autoload-waypoints", True):
         # For some reason the mqtt client is not really listening yet
         time.sleep(0.2)
         load_default_waypoints()

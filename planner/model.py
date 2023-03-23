@@ -68,33 +68,33 @@ def calculate_distance(wp1: Location, wp2: Location) -> float:
     dz = p2.z - p1.z
     return math.sqrt(dx * dx + dy * dy + dz * dz)
 
-
-def calculate_line(wp1: Location, wp2: Location, steps: int) -> List[Location]:
-    p1 = wp1.pose.position
-    p2 = wp2.pose.position
-    dx = p2.x - p1.x
-    dy = p2.y - p1.y
-    dz = p2.z - p1.z
+def calculate_rotation_distance(wp1: Location, wp2: Location) -> float:
+    """Distance matrix for waypoint orientation, here simplified to Euclidean distance."""
     o1 = wp1.pose.orientation
     o2 = wp2.pose.orientation
-    dox = o2.x - o1.x
-    doy = o2.y - o1.x
-    doz = o2.z - o1.z
-    dow = o2.w - o1.w
-    wps = [wp1] * steps
-    for ii in range(steps):
-        wps[ii].pose.position.x += (ii + 1) * dx / steps
-        wps[ii].pose.position.y += (ii + 1) * dy / steps
-        wps[ii].pose.position.z += (ii + 1) * dz / steps
-        wps[ii].pose.orientation.x += (ii + 1) * dox / steps
-        wps[ii].pose.orientation.y += (ii + 1) * doy / steps
-        wps[ii].pose.orientation.z += (ii + 1) * doz / steps
-        wps[ii].pose.orientation.w += (ii + 1) * dow / steps
-        if wps[ii].pose == wp2.pose:
-            wps[ii].name = wp2.name
-        else:
-            wps[ii].name = wp1.name + "->" + wp2.name
-    return wps
+    return math.sqrt((o2.x-o1.x)**2+(o2.y-o1.y)**2+(o2.z-o1.z)**2+(o2.w-o1.w)**2)
+
+def calculate_along_line(wp1: Location, wp2: Location, position_dist: float, orientation_dist: float) -> Location:
+    """ Finds wp3 along the line between wp1 and wp2 with a given distance from wp1"""
+    wp3 = wp1
+    p1 = wp1.pose.position
+    p2 = wp2.pose.position
+    dist = calculate_distance(wp1,wp2) if calculate_distance(wp1,wp2) !=0 else 1
+    wp3.pose.position.x += position_dist*(p2.x - p1.x)/dist
+    wp3.pose.position.y += position_dist*(p2.y - p1.y)/dist
+    wp3.pose.position.z += position_dist*(p2.z - p1.z)/dist
+    o1 = wp1.pose.orientation
+    o2 = wp2.pose.orientation
+    dist = calculate_rotation_distance(wp1,wp2) if calculate_rotation_distance(wp1,wp2) != 0 else 1
+    wp3.pose.orientation.x += orientation_dist*(o2.x - o1.x)/dist
+    wp3.pose.orientation.y += orientation_dist*(o2.y - o1.y)/dist
+    wp3.pose.orientation.z += orientation_dist*(o2.z - o1.z)/dist
+    wp3.pose.orientation.w += orientation_dist*(o2.w - o1.w)/dist
+    if wp3.pose == wp2.pose:
+        wp3.name = wp2.name
+    else:
+        wp3.name = wp1.name + "->" + wp2.name
+    return wp3
 
 
 @dataclass

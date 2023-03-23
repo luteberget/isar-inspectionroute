@@ -13,6 +13,8 @@
         },
         {
             "type": "virtual",
+            "speed": "1",
+            "rotation_speed": "0.5",
             "initial_state":{
                 "location": {
                     "name": "wp0",
