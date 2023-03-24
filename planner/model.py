@@ -28,7 +28,10 @@ class Location:
     pose: Pose
 
 
-WaypointStatus = Enum("WaypointStatus", ["PENDING", "SUCCESS", "FAILURE"])
+class WaypointStatus(str, Enum):
+    PENDING = "Pending"
+    SUCCESS = "Success"
+    FAILURES = "Failure"
 
 
 @dataclass
@@ -47,8 +50,28 @@ class BatteryConstraint:
 
 @dataclass
 class RobotState:
-    current_location: Location
+    current_location: Location | None
     battery_constraint: BatteryConstraint | None
+
+
+@dataclass
+class PlanStep:
+    location: Location
+    remaining_battery: float
+
+
+@dataclass
+class PlanStatus:
+    solver: str
+    total_cost: float
+    robot_plans: List[List[PlanStep]]
+
+
+@dataclass
+class ControllerStatus:
+    waypoints: List[Waypoint]
+    robots: List[RobotState]
+    plan: PlanStatus
 
 
 def mk_pose(x, y, z=0.0) -> Pose:
@@ -68,46 +91,46 @@ def calculate_distance(wp1: Location, wp2: Location) -> float:
     dz = p2.z - p1.z
     return math.sqrt(dx * dx + dy * dy + dz * dz)
 
+
 def calculate_rotation_distance(wp1: Location, wp2: Location) -> float:
     """Distance matrix for waypoint orientation, here simplified to Euclidean distance."""
     o1 = wp1.pose.orientation
     o2 = wp2.pose.orientation
-    return math.sqrt((o2.x-o1.x)**2+(o2.y-o1.y)**2+(o2.z-o1.z)**2+(o2.w-o1.w)**2)
+    return math.sqrt(
+        (o2.x - o1.x) ** 2
+        + (o2.y - o1.y) ** 2
+        + (o2.z - o1.z) ** 2
+        + (o2.w - o1.w) ** 2
+    )
 
-def calculate_along_line(wp1: Location, wp2: Location, position_dist: float, orientation_dist: float) -> Location:
-    """ Finds wp3 along the line between wp1 and wp2 with a given distance from wp1"""
+
+def calculate_along_line(
+    wp1: Location, wp2: Location, position_dist: float, orientation_dist: float
+) -> Location:
+    """Finds wp3 along the line between wp1 and wp2 with a given distance from wp1"""
     wp3 = wp1
     p1 = wp1.pose.position
     p2 = wp2.pose.position
-    dist = calculate_distance(wp1,wp2) if calculate_distance(wp1,wp2) !=0 else 1
-    wp3.pose.position.x += position_dist*(p2.x - p1.x)/dist
-    wp3.pose.position.y += position_dist*(p2.y - p1.y)/dist
-    wp3.pose.position.z += position_dist*(p2.z - p1.z)/dist
+    dist = calculate_distance(wp1, wp2) if calculate_distance(wp1, wp2) != 0 else 1
+    wp3.pose.position.x += position_dist * (p2.x - p1.x) / dist
+    wp3.pose.position.y += position_dist * (p2.y - p1.y) / dist
+    wp3.pose.position.z += position_dist * (p2.z - p1.z) / dist
     o1 = wp1.pose.orientation
     o2 = wp2.pose.orientation
-    dist = calculate_rotation_distance(wp1,wp2) if calculate_rotation_distance(wp1,wp2) != 0 else 1
-    wp3.pose.orientation.x += orientation_dist*(o2.x - o1.x)/dist
-    wp3.pose.orientation.y += orientation_dist*(o2.y - o1.y)/dist
-    wp3.pose.orientation.z += orientation_dist*(o2.z - o1.z)/dist
-    wp3.pose.orientation.w += orientation_dist*(o2.w - o1.w)/dist
+    dist = (
+        calculate_rotation_distance(wp1, wp2)
+        if calculate_rotation_distance(wp1, wp2) != 0
+        else 1
+    )
+    wp3.pose.orientation.x += orientation_dist * (o2.x - o1.x) / dist
+    wp3.pose.orientation.y += orientation_dist * (o2.y - o1.y) / dist
+    wp3.pose.orientation.z += orientation_dist * (o2.z - o1.z) / dist
+    wp3.pose.orientation.w += orientation_dist * (o2.w - o1.w) / dist
     if wp3.pose == wp2.pose:
         wp3.name = wp2.name
     else:
-        wp3.name = wp1.name + "->" + wp2.name
+        wp3.name = wp1.name.split("->")[0] + "->" + wp2.name
     return wp3
-
-
-@dataclass
-class PlanStep:
-    location: Location
-    remaining_battery: float
-
-
-@dataclass
-class Status:
-    solver: str
-    total_cost: float
-    plan: List[List[PlanStep]]
 
 
 def loc_string(location: Location):

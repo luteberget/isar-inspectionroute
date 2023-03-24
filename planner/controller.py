@@ -1,17 +1,16 @@
 import json
 import time
 import paho.mqtt.client as mqtt
-from alitra import Pose, Position, Orientation
-
-
 from typing import List, Optional
-#from isarrobot import ISARRobot
+
+# from isarrobot import ISARRobot
 from load_waypoints import load_default_waypoints
 
 from model import (
+    ControllerStatus,
     Location,
+    PlanStatus,
     RobotState,
-    Status,
     Waypoint,
     WaypointID,
     WaypointStatus,
@@ -33,6 +32,7 @@ class Controller:
     current_plan_progress: List[int] = []
     current_plan: List[List[WaypointID]] = []
     current_plan_version: int = 0
+
     def __init__(self, configuration):
         print("Loading configuration:", json.dumps(configuration, indent=2))
         self.planner_name = configuration["planner"]
@@ -45,7 +45,7 @@ class Controller:
 
         for robot_configuration in configuration["robots"]:
             if robot_configuration["type"] == "isar":
-                #self.robots.append(ISARRobot(robot_configuration))
+                # self.robots.append(ISARRobot(robot_configuration))
                 print("not an option right know")
             elif robot_configuration["type"] == "virtual":
                 self.robots.append(VirtualRobot(robot_configuration))
@@ -56,8 +56,7 @@ class Controller:
             self.current_plan_progress.append(0)
 
         self._init_mqtt(configuration)
-        self.publish_waypoints()
-        self.publish_plan([])
+        self.publish_state([])
 
     def _init_mqtt(self, configuration):
         hostname = configuration["mqtt-hostname"]
@@ -106,8 +105,6 @@ class Controller:
     def main_loop(self):
         while True:
             robot_states = [robot.get_state() for robot in self.robots]
-            self.publish_plan(robot_states)
-
             self.updates_from_robot_events()
 
             if not all(self.robot_ready(s) for s in robot_states):
@@ -118,9 +115,14 @@ class Controller:
                     self.log_msg("Updating plan because of flaw: " + plan_flaw)
                     self.update_plan(robot_states)
                     for ii in range(len(self.robots)):
-                        self.robots[ii].set_plan([(id,self.waypoints[id].location) for id in self.current_plan[ii]])
-                    self.publish_plan(robot_states)
+                        self.robots[ii].set_plan(
+                            [
+                                (id, self.waypoints[id].location)
+                                for id in self.current_plan[ii]
+                            ]
+                        )
 
+            self.publish_state(robot_states)
             time.sleep(0.5)
 
     def updates_from_robot_events(self):
@@ -170,7 +172,13 @@ class Controller:
             )
         )
         planned_waypoints = frozenset(
-            (i for robot_plan in self.current_plan for i in robot_plan)
+            (
+                i
+                for robot_plan, progress in zip(
+                    self.current_plan, self.current_plan_progress
+                )
+                for i in robot_plan[progress:]
+            )
         )
 
         if pending_waypoints != planned_waypoints:
@@ -195,12 +203,6 @@ class Controller:
         self.last_status_message = s
         print("Status: ", s)
 
-    def publish_plan(self, robot_states: List[RobotState]):
-        total_cost, combined_plan = self.integrate_plan(robot_states)
-        status = Status(self.planner_name, total_cost, combined_plan)
-        json_output = json_dumps_dataclass(status)
-        self._mqtt_client.publish("planner/plan", json_output, retain=True)
-
     def integrate_plan(self, robot_states):
         total_cost = 0.0
         combined_plan = []
@@ -215,19 +217,21 @@ class Controller:
             combined_plan.append(plan)
         return total_cost, combined_plan
 
-    def publish_waypoints(self):
-        json_output = json_dumps_dataclass(self.waypoints)
-        self._mqtt_client.publish("planner/waypoints", json_output, retain=True)
+    def publish_state(self, robot_states: List[RobotState]):
+        total_cost, combined_plan = self.integrate_plan(robot_states)
+        planstatus = PlanStatus(self.planner_name, total_cost, combined_plan)
+        controllerstatus = ControllerStatus(self.waypoints,
+                                            robot_states,
+                                            planstatus)
 
-    def publish_robot_states(self, states: List[RobotState]):
-        json_output = json_dumps_dataclass(states)
-        self._mqtt_client.publish("planner/robots", json_output, retain=True)
+        json_output = json_dumps_dataclass(controllerstatus)
+        self._mqtt_client.publish("planner/status", json_output, retain=True)
 
 
 if __name__ == "__main__":
-    #with open("configuration.json") as f:   
+    # with open("configuration.json") as f:
     with open("configuration_virtual.json") as f:
-        #configuration = json.loads(f)
+        # configuration = json.loads(f)
         configuration = json.load(f)
     controller = Controller(configuration)
 
