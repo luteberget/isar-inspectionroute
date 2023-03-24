@@ -1,80 +1,15 @@
-use std::time::Instant;
-
 use eframe::{
     egui::{self, plot::PlotPoints, Visuals},
     epaint::Color32,
 };
 use paho_mqtt::Receiver;
+mod model;
+use model::*;
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Pose {
-    pub position: Position,
-    pub orientation: Orientation,
-    // pub frame: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Position {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-    // pub frame_name: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Orientation {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-    pub w: f64,
-    // pub frame_name: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Location {
-    pub name: String,
-    pub pose: Pose,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PlanStep {
-    pub location: Location,
-    pub remaining_battery: f64,
-}
-
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct RobotPlan {
-    pub plan: Vec<PlanStep>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PlanStatus {
-    pub solver: String,
-    pub total_cost: f64,
-    pub plan :Vec<RobotPlan>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct BatteryConstraint {
-    pub charger_location: Location,
-    pub battery_distance: f64,
-    pub remaining_distance: f64,
-}
-
-struct RobotState {
-    battery_constraint: Option<BatteryConstraint>,
-    current_location: Option<Location>,
-}
 struct PlanApp {
     _mqtt_client: paho_mqtt::Client,
     mqtt_receiver: Receiver<Option<paho_mqtt::Message>>,
-    robots :Vec<RobotState>,
-    waypoints: Option<Vec<(Location, Instant)>>,
-    current_plan: Option<PlanStatus>,
-    previous_plan: Option<PlanStatus>,
+    status: Option<ControllerStatus>,
 }
 
 fn draw_arrow(ui: &mut egui::plot::PlotUi, from: Option<&Pose>, to: &Pose) {
@@ -95,26 +30,14 @@ impl PlanApp {
         while let Ok(Some(msg)) = self.mqtt_receiver.try_recv() {
             println!("topic {} payload {}", msg.topic(), msg.payload_str());
             match msg.topic() {
-                // "isar/william/pose" => {
-                //     let json =
-                //         serde_json::from_str::<serde_json::Value>(&msg.payload_str()).unwrap();
-                //     let pose_json = json.as_object().unwrap().get("pose").unwrap().clone();
-
-                //     self.current_location = Some(Location {
-                //         name: "current_location".to_string(),
-                //         pose: serde_json::from_value(pose_json).unwrap(),
-                //     });
-                // }
-                "planner/battery_constraint" => {
-                    self.battery_constraint =
-                        Some(serde_json::from_str(&msg.payload_str()).unwrap());
-                }
-                "planner/status" => {
-                    self.current_plan = Some(serde_json::from_str(&msg.payload_str()).unwrap());
-                }
-                "planner/waypoints" => {
-                    self.waypoints = Some(serde_json::from_str(&msg.payload_str()).unwrap());
-                }
+                "planner/status" => match serde_json::from_str(&msg.payload_str()) {
+                    Ok(x) => {
+                        self.status = Some(x);
+                    }
+                    Err(x) => {
+                        println!("WARNING: could not parse status message {:?}", x);
+                    }
+                },
                 _ => {
                     println!("Warning unknown topic");
                 }
@@ -124,49 +47,53 @@ impl PlanApp {
 
     pub fn draw_gui(&mut self, ctx: &eframe::egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
+            if self.status.is_none() {
+                ui.heading("Waiting for first status message from controller.");
+                return;
+            }
+            let status = self.status.as_ref().unwrap();
+
             egui::SidePanel::left("left_panel")
-                .default_width(500.0)
+                .min_width(500.0)
+                .max_width(500.0)
                 .show_inside(ui, |ui| {
-                    if let Some(batt) = &self.battery_constraint {
-                        ui.label(format!("Battery distance {:.2}", batt.battery_distance));
-                        ui.label(format!(
-                            "Battery full distance {:.2}",
-                            batt.remaining_distance
-                        ));
-                        ui.label(format!(
-                            "Battery charger location {:?}",
-                            batt.charger_location
-                        ));
-                    } else {
-                        ui.label(format!("Battery unknown"));
+                    for (idx, robot) in status.robots.iter().enumerate() {
+                        ui.heading(&format!("Robot #{}", idx + 1));
+
+                        if let Some(batt) = &robot.battery_constraint {
+                            ui.label(format!("Battery distance {:.2}", batt.battery_distance));
+                            ui.label(format!(
+                                "Battery full distance {:.2}",
+                                batt.remaining_distance
+                            ));
+                            ui.label(format!(
+                                "Battery charger location {:?}",
+                                batt.charger_location
+                            ));
+                        } else {
+                            ui.label(format!("Battery unknown"));
+                        }
+
+                        if let Some(loc) = &robot.current_location {
+                            ui.label(format!("Location: {:?}", loc));
+                        } else {
+                            ui.label(format!("Location unknown"));
+                        }
                     }
 
-                    if let Some(wps) = &self.waypoints {
-                        ui.label(format!("Waypoints: {}", wps.len()));
-                    } else {
-                        ui.label(format!("Waypoints unknown"));
-                    }
+                    ui.label(format!("Waypoints: {}", status.waypoints.len()));
 
-                    if let Some(loc) = &self.current_location {
-                        ui.label(format!("Location: {:?}", loc));
-                    } else {
-                        ui.label(format!("Location unknown"));
-                    }
-
-                    if let Some(status) = &self.current_plan {
-                        ui.label(format!("Solver: {}", &status.solver));
-                        ui.label(format!("Plan cost: {:.2}", &status.total_cost));
-                        ui.label(format!("Plan steps: {}", &status.plan.len()));
-
-                        for (i, step) in status.plan.iter().enumerate() {
+                    ui.label(format!("Solver: {}", &status.plan.solver));
+                    ui.label(format!("Plan cost: {:.2}", &status.plan.total_cost));
+                    for (i, robot_steps) in status.plan.robot_plans.iter().enumerate() {
+                        ui.heading(format!("Plan for robot {}", i + 1));
+                        for step in robot_steps.iter() {
                             ui.label(format!(
                                 "Step {}: {}, batt:{:.2}",
                                 i, step.location.name, step.remaining_battery
                             ));
-                            // ui.label(format!("Solver: {}", &status.solver));
                         }
-                    } else {
-                        ui.label(format!("Status unknown"));
+                        // ui.label(format!("Solver: {}", &status.solver));
                     }
                 });
 
@@ -184,43 +111,52 @@ impl PlanApp {
 
             plot.show(ui, |plot_ui| {
                 // Current location.
-                if let Some(loc) = self.current_location.as_ref() {
-                    plot_ui.points(
-                        egui::plot::Points::new(PlotPoints::from([
-                            loc.pose.position.x,
-                            loc.pose.position.y,
-                        ]))
-                        .shape(egui::plot::MarkerShape::Diamond)
-                        .name("Current robot location")
-                        .color(eframe::epaint::Color32::DARK_RED)
-                        .radius(8.0),
-                    );
+
+                for robot in status.robots.iter() {
+                    if let Some(loc) = robot.current_location.as_ref() {
+                        plot_ui.points(
+                            egui::plot::Points::new(PlotPoints::from([
+                                loc.pose.position.x,
+                                loc.pose.position.y,
+                            ]))
+                            .shape(egui::plot::MarkerShape::Diamond)
+                            .name("Current robot location")
+                            .color(eframe::epaint::Color32::DARK_RED)
+                            .radius(8.0),
+                        );
+                    }
                 }
 
                 // Waypoints
-                if let Some(wps) = self.waypoints.as_ref() {
-                    plot_ui.points(
-                        egui::plot::Points::new(PlotPoints::from_iter(
-                            wps.iter().map(|p| [p.pose.position.x, p.pose.position.y]),
-                        ))
-                        .name("POI")
-                        .shape(egui::plot::MarkerShape::Plus)
-                        .color(eframe::epaint::Color32::DARK_GREEN)
-                        .radius(10.0),
-                    );
-                }
+                for wp in status.waypoints.iter() {
+                    let (shape, color) = match (wp.is_charger, &wp.status) {
+                        (true, _) => (
+                            egui::plot::MarkerShape::Circle,
+                            eframe::epaint::Color32::DARK_GREEN,
+                        ),
+                        (false, WaypointStatus::Pending) => (
+                            egui::plot::MarkerShape::Asterisk,
+                            eframe::epaint::Color32::BLUE,
+                        ),
+                        (false, WaypointStatus::Success) => (
+                            egui::plot::MarkerShape::Cross,
+                            eframe::epaint::Color32::DARK_GREEN,
+                        ),
+                        (false, WaypointStatus::Failure) => (
+                            egui::plot::MarkerShape::Cross,
+                            eframe::epaint::Color32::DARK_RED,
+                        ),
+                    };
 
-                // Charger
-                if let Some(batt) = self.battery_constraint.as_ref() {
                     plot_ui.points(
                         egui::plot::Points::new(PlotPoints::from([
-                            batt.charger_location.pose.position.x,
-                            batt.charger_location.pose.position.y,
+                            wp.location.pose.position.x,
+                            wp.location.pose.position.y,
                         ]))
-                        .shape(egui::plot::MarkerShape::Circle)
-                        .name("Robot dock (charging)")
-                        .color(eframe::epaint::Color32::LIGHT_RED)
-                        .radius(8.0),
+                        .name("POI")
+                        .shape(shape)
+                        .color(color)
+                        .radius(10.0),
                     );
                 }
 
@@ -237,10 +173,10 @@ impl PlanApp {
                 // }
 
                 // Plan arrows
-                if let Some(status) = self.current_plan.as_ref() {
-                    let mut prev_loc = None; //self.current_location.as_ref().map(|x| &x.pose);
+                for (robot_idx,robot_plan) in status.plan.robot_plans.iter().enumerate() {
+                    let mut prev_loc = status.robots[robot_idx].current_location.as_ref().map(|l| &l.pose);
 
-                    for item in status.plan.iter() {
+                    for item in robot_plan.iter() {
                         draw_arrow(plot_ui, prev_loc, &item.location.pose);
                         prev_loc = Some(&item.location.pose);
 
@@ -280,12 +216,6 @@ fn main() {
     match mqtt_client.connect(mqtt_conn_opts) {
         Ok(_res) => {
             mqtt_client.subscribe("planner/status", 0).unwrap();
-            mqtt_client.subscribe("planner/waypoints", 0).unwrap();
-
-            mqtt_client
-                .subscribe("planner/battery_constraint", 0)
-                .unwrap();
-            mqtt_client.subscribe("isar/william/pose", 0).unwrap();
             println!("Connected to MQTT.")
         }
         Err(_msg) => {
@@ -296,10 +226,7 @@ fn main() {
     let app = PlanApp {
         _mqtt_client: mqtt_client,
         mqtt_receiver,
-        battery_constraint: None,
-        waypoints: None,
-        current_plan: None,
-        current_location: None,
+        status: None,
     };
 
     eframe::run_native(
