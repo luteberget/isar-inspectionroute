@@ -32,6 +32,7 @@ class Controller:
     current_plan_progress: List[int] = []
     current_plan: List[List[WaypointID]] = []
     current_plan_version: int = 0
+    current_plan_reason: str | None = None
 
     def __init__(self, configuration):
         print("Loading configuration:", json.dumps(configuration, indent=2))
@@ -113,7 +114,7 @@ class Controller:
                 plan_flaw = self.is_plan_valid(robot_states)
                 if plan_flaw is not None:
                     self.log_msg("Updating plan because of flaw: " + plan_flaw)
-                    self.update_plan(robot_states)
+                    self.update_plan(robot_states, plan_flaw)
                     for ii in range(len(self.robots)):
                         self.robots[ii].set_plan(
                             [
@@ -191,11 +192,12 @@ class Controller:
         # Plan is valid.
         return None
 
-    def update_plan(self, robot_states: List[RobotState]):
+    def update_plan(self, robot_states: List[RobotState], plan_flaw: str | None):
         new_plan = self.planner_fn(robot_states, self.waypoints)
         self.current_plan = new_plan
         self.current_plan_progress = [0 for _ in new_plan]
         self.current_plan_version += 1
+        self.current_plan_reason = plan_flaw
 
     def set_status(self, s):
         if self.last_status_message == s:
@@ -219,10 +221,14 @@ class Controller:
 
     def publish_state(self, robot_states: List[RobotState]):
         total_cost, combined_plan = self.integrate_plan(robot_states)
-        planstatus = PlanStatus(self.planner_name, total_cost, combined_plan)
-        controllerstatus = ControllerStatus(self.waypoints,
-                                            robot_states,
-                                            planstatus)
+        planstatus = PlanStatus(
+            self.planner_name,
+            total_cost,
+            combined_plan,
+            self.current_plan_version,
+            self.current_plan_reason,
+        )
+        controllerstatus = ControllerStatus(self.waypoints, robot_states, planstatus)
 
         json_output = json_dumps_dataclass(controllerstatus)
         self._mqtt_client.publish("planner/status", json_output, retain=True)

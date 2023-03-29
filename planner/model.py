@@ -65,6 +65,8 @@ class PlanStatus:
     solver: str
     total_cost: float
     robot_plans: List[List[PlanStep]]
+    plan_version :int
+    plan_reason :str
 
 
 @dataclass
