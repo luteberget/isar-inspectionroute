@@ -6,10 +6,22 @@ use paho_mqtt::Receiver;
 mod model;
 use model::*;
 
+enum Event {
+    WaypointSuccess(usize),
+    WaypointFailure(usize),
+}
+
 struct PlanApp {
     _mqtt_client: paho_mqtt::Client,
     mqtt_receiver: Receiver<Option<paho_mqtt::Message>>,
     status: Option<ControllerStatus>,
+
+    previous_plan: Option<PlanStatus>,
+
+    battery_history: Vec<Vec<(f64, f64)>>,
+    events: Vec<Vec<(f64, Event)>>,
+
+    enable_send_waypoint: bool,
 }
 
 fn draw_arrow(ui: &mut egui::plot::PlotUi, from: Option<&Pose>, to: &Pose) {
@@ -30,14 +42,33 @@ impl PlanApp {
         while let Ok(Some(msg)) = self.mqtt_receiver.try_recv() {
             println!("topic {} payload {}", msg.topic(), msg.payload_str());
             match msg.topic() {
-                "planner/status" => match serde_json::from_str(&msg.payload_str()) {
-                    Ok(x) => {
-                        self.status = Some(x);
+                "planner/status" => {
+                    match serde_json::from_str::<ControllerStatus>(&msg.payload_str()) {
+                        Ok(x) => {
+                            let previous_status = self.status.take();
+
+                            if self.previous_plan.is_none()
+                                || self.previous_plan.as_ref().unwrap().plan_version
+                                    < x.plan.plan_version
+                            {
+                                self.previous_plan = previous_status.map(|x| x.plan);
+                            }
+
+                            for (idx, robot) in x.robots.iter().enumerate() {
+                                let time_now = todo!();
+                                self.battery_history[idx].push((
+                                    time_now,
+                                    robot.battery_constraint.unwrap().battery_distance,
+                                ));
+                            }
+
+                            self.status = Some(x);
+                        }
+                        Err(x) => {
+                            println!("WARNING: could not parse status message {:?}", x);
+                        }
                     }
-                    Err(x) => {
-                        println!("WARNING: could not parse status message {:?}", x);
-                    }
-                },
+                }
                 _ => {
                     println!("Warning unknown topic");
                 }
@@ -57,6 +88,11 @@ impl PlanApp {
                 .min_width(500.0)
                 .max_width(500.0)
                 .show_inside(ui, |ui| {
+                    ui.checkbox(
+                        &mut self.enable_send_waypoint,
+                        "Click map to send waypoint.",
+                    );
+
                     for (idx, robot) in status.robots.iter().enumerate() {
                         ui.heading(&format!("Robot #{}", idx + 1));
 
@@ -100,6 +136,10 @@ impl PlanApp {
             // Map
             ui.heading("Map");
 
+            for robot in status.robots.iter() {
+                let plot = egui::plot::Plot::new("map_plot").data_aspect(1.0);
+            }
+
             let plot = egui::plot::Plot::new("map_plot").data_aspect(1.0);
             // .custom_label_func(|name, value| {
             //     if !name.is_empty() {
@@ -110,6 +150,13 @@ impl PlanApp {
             // })
 
             plot.show(ui, |plot_ui| {
+                if self.enable_send_waypoint && plot_ui.plot_clicked() {
+
+                    // TODO
+                    // send_waypoint(plot_ui.pointer_coordinate());
+                    // self._mqtt_client.publish(msg);
+                }
+
                 // Current location.
 
                 for robot in status.robots.iter() {
@@ -173,8 +220,11 @@ impl PlanApp {
                 // }
 
                 // Plan arrows
-                for (robot_idx,robot_plan) in status.plan.robot_plans.iter().enumerate() {
-                    let mut prev_loc = status.robots[robot_idx].current_location.as_ref().map(|l| &l.pose);
+                for (robot_idx, robot_plan) in status.plan.robot_plans.iter().enumerate() {
+                    let mut prev_loc = status.robots[robot_idx]
+                        .current_location
+                        .as_ref()
+                        .map(|l| &l.pose);
 
                     for item in robot_plan.iter() {
                         draw_arrow(plot_ui, prev_loc, &item.location.pose);
@@ -196,7 +246,6 @@ impl eframe::App for PlanApp {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         self.get_messages();
         self.draw_gui(ctx);
-
         ctx.request_repaint_after(std::time::Duration::from_secs_f32(0.2));
     }
 }
@@ -227,6 +276,10 @@ fn main() {
         _mqtt_client: mqtt_client,
         mqtt_receiver,
         status: None,
+        battery_history: vec![],
+        events: vec![],
+        previous_plan: None,
+        enable_send_waypoint: false,
     };
 
     eframe::run_native(
