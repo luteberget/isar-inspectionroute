@@ -3,11 +3,12 @@ from requests.compat import urljoin
 import paho.mqtt.client as mqtt
 from alitra import Pose
 import alitra
+import time
 
 import json
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from model import BatteryConstraint, Location, RobotState
+from model import BatteryConstraint, Location, RobotState, WaypointID
 from robotbase import RobotBase, TaskStatus
 
 
@@ -68,27 +69,25 @@ def convert_task_isar(tag, location: Location):
 def is_task_finished(msg: str):
     return msg == "successful" or msg == "partially_successful" or msg == "failed"
 
-   
-   
+
 class ISARRobot(RobotBase):
     robot_is_idle: bool = False
     robot_current_location: Optional[Location] = None
     robot_battery_level: float = 1.0
     configuration = None
-    
+
     current_mission_id = None
     current_mission_tasks = None
-    current_plan = None
-    current_wp_seq = None
     _mqtt_client = None
 
-    charger_location :Location | None = None
-    robot_battery_distance :float = 10000.0
+    recent_events: List[TaskStatus] = []
+    pending_set_plan :List[Tuple[WaypointID, Location]] | None = None
+    previous_set_plan_time :float = time.time()
 
-    recent_events = []
+    charger_location: Location | None = None
+    robot_battery_distance: float = 10000.0
 
     def __init__(self, configuration):
-
         # TODO parse charger location
         # TODO get battery distance
 
@@ -97,10 +96,15 @@ class ISARRobot(RobotBase):
         pass
 
     def get_state(self) -> RobotState:
-        return RobotState(
-            self.robot_current_location,
-            self.get_battery_constraint())
-    
+        if self.pending_set_plan is not None:
+            if time.time() - self.previous_set_plan_time > 1.0:
+                self.previous_set_plan_time = time.time()
+                ok = self.set_isar_plan(self.pending_set_plan)
+                if ok:
+                    self.pending_set_plan = None
+
+        return RobotState(self.robot_current_location, self.get_battery_constraint())
+
     def get_event(self) -> List[TaskStatus]:
         value = self.recent_events
         self.recent_events = []
@@ -114,11 +118,34 @@ class ISARRobot(RobotBase):
             self.robot_battery_distance,
             self.robot_battery_level * self.robot_battery_distance,
         )
+    
+    def send_plan(self, waypoints :List[Tuple[WaypointID, Location]]):
+        self.pending_set_plan = waypoints
 
-    def send_plan(sefl):
+    def set_isar_plan(self, waypoints :List[Tuple[WaypointID, Location]]) -> bool:
+        print(f"Trying to set ISAR plan {waypoints}")
+
+        # First, cancel existing mission
+        if self.current_mission_id is not None or not self.robot_is_idle:
+            url = urljoin(self.params.isar_url, "schedule/stop-mission")
+            req = requests.post(url)
+            print(f"Stopped {req}")
+            if req.ok:
+                self.current_mission_id = None
+                self.current_mission_tasks = None
+            else:
+                print("Could not stop mission", req, req.json())
+                if self.robot_is_idle:
+                    self.current_mission_id = None
+                    self.current_mission_tasks = None
+
+        if not self.robot_is_idle:
+            print("The robot is not idle, cannot receive misson.")
+            return False
+
         # Send the sequence as a mission to ISAR.
         tasks = list(
-            map(lambda wp: convert_task_isar(f"wp{wp[0]}", wp[1]), wp_sequence)
+            map(lambda wp: convert_task_isar(f"wp{wp[0]}", wp[1]), waypoints)
         )
         mission = {
             "mission_definition": {
@@ -138,7 +165,7 @@ class ISARRobot(RobotBase):
             self.current_mission_id = response["id"]
             self.current_mission_tasks = [
                 (wp[0], task_data["id"])
-                for task_data, wp in zip(response["tasks"], wp_sequence)
+                for task_data, wp in zip(response["tasks"], waypoints)
             ]
             print(
                 "Current mission",
@@ -148,16 +175,10 @@ class ISARRobot(RobotBase):
             )
             self.robot_is_idle = False
 
-            # Send the current plan over MQTT
-            self.current_wp_seq = wp_sequence
-            cost, self.current_plan = self.integrate_plan(wp_sequence)
-            self.publish_plan(cost, self.current_plan)
-
             return True
         else:
             print("Warning: ISAR command failed", response)
             return False
-
 
     def cancel_current_mission(self):
         # First, cancel existing mission
@@ -173,7 +194,7 @@ class ISARRobot(RobotBase):
                 if self.robot_is_idle:
                     self.current_mission_id = None
                     self.current_mission_tasks = None
-    
+
     def _init_mqtt_interface(self):
         hostname = self.configuration["mqtt-hostname"]
         port = self.configuration["mqtt-port"] or 1883
@@ -185,7 +206,7 @@ class ISARRobot(RobotBase):
 
         # The callback for when the client receives a CONNACK response from the server.
         def mqtt_connect(client, userdata, flags, rc):
-            print("Connected with result code " + str(rc))
+            print("ISARRobot MQTT: Connected with result code " + str(rc))
             # Subscribing in on_connect() means that if we lose the connection and
             # reconnect then subscriptions will be renewed.
             client.subscribe(mqtt_isar_state_topic)
@@ -197,7 +218,6 @@ class ISARRobot(RobotBase):
 
         # The callback for when a PUBLISH message is received from the server.
         def mqtt_message(client, userdata, msg):
-            # print("MQTT: ", msg.topic + " " + str(msg.payload))
             if msg.topic == mqtt_isar_state_topic:
                 state_msg = json.loads(msg.payload)
                 if state_msg["state"] == "idle":
@@ -206,39 +226,31 @@ class ISARRobot(RobotBase):
                     self.current_mission_tasks = None
                 else:
                     self.robot_is_idle = False
+
             elif msg.topic == mqtt_isar_robot_location_topic:
                 loc_msg = json.loads(msg.payload)
-                # print("LOC", loc_msg)
                 self.robot_current_location = Location(
                     "current_location", json_to_alitra_pose(loc_msg["pose"])
                 )
 
-            # TODO override battery
+            elif msg.topic == mqtt_isar_task_topic:
+                task_msg = json.loads(msg.payload)
+                print("ISARRobot: Received task message", task_msg)
+                if self.current_mission_tasks is not None:
+                    for wp_id, task_id in self.current_mission_tasks:
+                        if task_id == task_msg["task_id"] and is_task_finished(
+                            task_msg["status"]
+                        ):
+                            success = task_msg["status"] == "successful"
+                            self.recent_events.append(TaskStatus(wp_id, success))
 
+            # TODO override battery
             # elif msg.topic == override_battery_level_topic:
             #     batt_msg = json.loads(msg.payload)
             #     print("Override battery level", batt_msg)
             #     self.robot_battery_level = batt_msg["level"]
             #     self.check_plan_battery()
-            elif msg.topic == mqtt_isar_task_topic:
-                task_msg = json.loads(msg.payload)
-                print("Received task message", task_msg)
-                if self.current_mission_tasks is not None:
-                    for (wp_id, task_id) in self.current_mission_tasks:
-                        if task_id == task_msg["task_id"] and is_task_finished(
-                            task_msg["status"]
-                        ):
-                            print(
-                                "removing wp_id ",
-                                wp_id,
-                                "because it has status",
-                                task_msg["status"],
-                            )
-                            self.waypoints = [
-                                (id_, wp) for id_, wp in self.waypoints if id_ != wp_id
-                            ]
-                            self.publish_waypoints()
-                    pass
+
             else:
                 print("unhandled message", msg.topic + " " + str(msg.payload))
 
