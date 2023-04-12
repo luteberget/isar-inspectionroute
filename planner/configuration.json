@@ -5,38 +5,40 @@
     "autoload-waypoints": true,
     "robots": [
         {
-            "type": "isar",
-            "isar-url": "http://localhost:3000/",
-            "isar-robot-name": "R2-D2",
-            "mqtt-hostname": "localhost",
-            "mqtt-port": null
+            "name": "Ronny",
+            "type": "virtual",
+            "speed": 0.3,
+            "rotation_speed": 0.5,
+            "init_loc": {
+                "name": "ronny_start",
+                "x": 0.0,
+                "y": 0.0
+            },
+            "charger": {
+                "name": "ronny_charger",
+                "x": 1.5,
+                "y": 2.5
+            },
+            "battery_distance": 5,
+            "remaining_distance": 5
         },
         {
+            "name": "Sigrid",
             "type": "virtual",
-            "speed": "1",
-            "rotation_speed": "0.5",
-            "initial_state":{
-                "location": {
-                    "name": "wp0",
-                    "position":{
-                        "x": "0",
-                        "y": "0",
-                        "z": "0"
-                    },
-                    "orientation":{
-                        "w": "1",
-                        "x": "0",
-                        "y": "0",
-                        "z": "0"   
-                    }
-                },
-                "battery_constraint":{
-                    "charger_location":"wp0",
-                    "battery_distance": "10",
-                    "remaining_distance": "10"
-                }
-
-            }
+            "speed": 0.3,
+            "rotation_speed": 0.5,
+            "init_loc": {
+                "name": "sigrid_start",
+                "x": 5.0,
+                "y": 0.0
+            },
+            "charger": {
+                "name": "sigrid_charger",
+                "x": 2.5,
+                "y": 2.5
+            },
+            "battery_distance": 5,
+            "remaining_distance": 5
         }
     ]
 }

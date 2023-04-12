@@ -1,14 +1,16 @@
 from enum import Enum
-from typing import List
+from typing import List, Literal
 from alitra import Pose, Position, Orientation
 from dataclasses import dataclass
 import math
-import dataclasses, json
+import dataclasses
+import json
 
 mqtt_planner_add_waypoint_topic: str = "planner/add_waypoint"
 
 
 WaypointID = int
+TaskID = int
 
 
 class DataclassJSONEncoder(json.JSONEncoder):
@@ -31,7 +33,7 @@ class Location:
 class WaypointStatus(str, Enum):
     PENDING = "Pending"
     SUCCESS = "Success"
-    FAILURES = "Failure"
+    FAILURE = "Failure"
 
 
 @dataclass
@@ -43,15 +45,22 @@ class Waypoint:
 
 @dataclass
 class BatteryConstraint:
-    charger_location: Location
+    charger_location: Location | None
     battery_distance: float
     remaining_distance: float
 
 
 @dataclass
+class RobotParams:
+    speed: float
+    rotation_speed: float
+
+
+@dataclass
 class RobotState:
+    parameters: RobotParams
     current_location: Location | None
-    battery_constraint: BatteryConstraint | None
+    battery_constraint: BatteryConstraint
 
 
 @dataclass
@@ -65,8 +74,8 @@ class PlanStatus:
     solver: str
     total_cost: float
     robot_plans: List[List[PlanStep]]
-    plan_version :int
-    plan_reason :str
+    plan_version: int
+    plan_reason: str | None
 
 
 @dataclass
@@ -75,12 +84,13 @@ class ControllerStatus:
     robots: List[RobotState]
     plan: PlanStatus
 
+TaskSpec = Literal["charge"] | WaypointID
 
 def mk_pose(x, y, z=0.0) -> Pose:
     return Pose(
-        position=Position(x, y, z, 0.0),
-        orientation=Orientation(0, 0, 0, 1, frame=None),
-        frame=None,
+        position=Position(x, y, z, frame=None), # type: ignore
+        orientation=Orientation(0, 0, 0, 1, frame=None), # type: ignore
+        frame=None, # type: ignore
     )
 
 
@@ -113,7 +123,8 @@ def calculate_along_line(
     wp3 = wp1
     p1 = wp1.pose.position
     p2 = wp2.pose.position
-    dist = calculate_distance(wp1, wp2) if calculate_distance(wp1, wp2) != 0 else 1
+    dist = calculate_distance(
+        wp1, wp2) if calculate_distance(wp1, wp2) != 0 else 1
     wp3.pose.position.x += position_dist * (p2.x - p1.x) / dist
     wp3.pose.position.y += position_dist * (p2.y - p1.y) / dist
     wp3.pose.position.z += position_dist * (p2.z - p1.z) / dist
@@ -142,16 +153,20 @@ def loc_string(location: Location):
     return f"Loc({location.name},{location.pose.position.x},{location.pose.position.y},{location.pose.position.z})"
 
 
-def integrate_robot_plan(state: RobotState, wp_sequence: List[Waypoint]):
+def integrate_robot_plan(state: RobotState, waypoints: List[Waypoint], tasks: List[TaskSpec]):
+    if state.current_location is None:
+        raise Exception("Cannot integrate robot plan with unknown position.")
+    
     cost = 0
-    battery = float("inf")
-    if state.battery_constraint is not None:
-        battery = state.battery_constraint.remaining_distance
+    battery = state.battery_constraint.remaining_distance
     prev_loc = state.current_location
     plan = []
 
-    for wp in wp_sequence:
-        d = calculate_distance(prev_loc, wp.location)
+    for task in tasks:
+        location = state.battery_constraint.charger_location if task == "charge" else waypoints[task].location
+        if location is None:
+            raise Exception("Location error")
+        d = calculate_distance(prev_loc, location)
         cost += d
         battery -= d
         if battery < 0.05:
@@ -159,10 +174,10 @@ def integrate_robot_plan(state: RobotState, wp_sequence: List[Waypoint]):
                 "Warning: less than 5 percent battery",
                 battery,
                 "at",
-                loc_string(wp.location),
+                loc_string(location),
             )
-        plan.append(PlanStep(wp.location, battery))
-        if wp.is_charger:
+        plan.append(PlanStep(location, battery))
+        if task == "charge":
             battery = state.battery_constraint.battery_distance
-        prev_loc = wp.location
+        prev_loc = location
     return cost, plan

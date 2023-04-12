@@ -95,21 +95,22 @@ impl PlanApp {
 
                     for (idx, robot) in status.robots.iter().enumerate() {
                         ui.heading(&format!("Robot #{}", idx + 1));
+                        
+                        let battery_fraction = robot.battery_constraint.remaining_distance
+                        / robot.battery_constraint.battery_distance;
+                        
+                        ui.add(egui::ProgressBar::new(battery_fraction as f32).text(format!(
+                            "Battery level {:.2}/{:.2}",
+                            robot.battery_constraint.remaining_distance,
+                            robot.battery_constraint.battery_distance
+                        )));
+                        ui.end_row();
 
-                        if let Some(batt) = &robot.battery_constraint {
-                            ui.label(format!("Battery distance {:.2}", batt.battery_distance));
-                            ui.label(format!(
-                                "Battery full distance {:.2}",
-                                batt.remaining_distance
-                            ));
-                            ui.label(format!(
-                                "Battery charger location {:?}",
-                                batt.charger_location
-                            ));
-                        } else {
-                            ui.label(format!("Battery unknown"));
-                        }
-
+                        ui.label(format!(
+                            "Battery charger location {:?}",
+                            robot.battery_constraint.charger_location
+                        ));
+                        
                         if let Some(loc) = &robot.current_location {
                             ui.label(format!("Location: {:?}", loc));
                         } else {
@@ -172,6 +173,23 @@ impl PlanApp {
                             .radius(8.0),
                         );
                     }
+
+                    // Charger location
+                    if let Some(charger_location) =
+                        robot.battery_constraint.charger_location.as_ref()
+                    {
+                        let loc = &charger_location.pose;
+                        plot_ui.points(
+                            egui::plot::Points::new(PlotPoints::from([
+                                loc.position.x,
+                                loc.position.y,
+                            ]))
+                            .shape(egui::plot::MarkerShape::Circle)
+                            .name("Robot dock (charging)")
+                            .color(eframe::epaint::Color32::GREEN)
+                            .radius(8.0),
+                        );
+                    }
                 }
 
                 // Waypoints
@@ -206,18 +224,6 @@ impl PlanApp {
                         .radius(10.0),
                     );
                 }
-
-                // // Dock
-                // if let Some(dock) = app.dock.as_ref() {
-                //     let loc = &dock.pose;
-                //     plot_ui.points(
-                //         egui::plot::Points::new(PlotPoints::from([loc.position.x, loc.position.y]))
-                //             .shape(egui::plot::MarkerShape::Circle)
-                //             .name("Robot dock (charging)")
-                //             .color(eframe::epaint::Color32::GREEN)
-                //             .radius(8.0),
-                //     );
-                // }
 
                 // Plan arrows
                 for (robot_idx, robot_plan) in status.plan.robot_plans.iter().enumerate() {

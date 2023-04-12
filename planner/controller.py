@@ -2,6 +2,7 @@ import json
 import time
 import paho.mqtt.client as mqtt
 from typing import List, Optional
+from isarrobot import ISARRobot
 
 # from isarrobot import ISARRobot
 from load_waypoints import load_default_waypoints
@@ -11,6 +12,7 @@ from model import (
     Location,
     PlanStatus,
     RobotState,
+    TaskSpec,
     Waypoint,
     WaypointID,
     WaypointStatus,
@@ -30,7 +32,7 @@ class Controller:
     robots: List[RobotBase] = []
     last_status_message: Optional[str] = None
     current_plan_progress: List[int] = []
-    current_plan: List[List[WaypointID]] = []
+    current_plan: List[List[TaskSpec]] = []
     current_plan_version: int = 0
     current_plan_reason: str | None = None
 
@@ -46,8 +48,7 @@ class Controller:
 
         for robot_configuration in configuration["robots"]:
             if robot_configuration["type"] == "isar":
-                # self.robots.append(ISARRobot(robot_configuration))
-                print("not an option right know")
+                self.robots.append(ISARRobot(robot_configuration))
             elif robot_configuration["type"] == "virtual":
                 self.robots.append(VirtualRobot(robot_configuration))
             else:
@@ -85,7 +86,8 @@ class Controller:
                 else:
                     loc = Location(
                         state_msg["name"],
-                        mk_pose(state_msg["x"], state_msg["y"], state_msg["z"]),
+                        mk_pose(state_msg["x"],
+                                state_msg["y"], state_msg["z"]),
                     )
                     self.waypoints.append(
                         Waypoint(WaypointStatus.PENDING, False, loc),
@@ -104,6 +106,7 @@ class Controller:
         return state.current_location is not None
 
     def main_loop(self):
+
         while True:
             robot_states = [robot.get_state() for robot in self.robots]
             self.updates_from_robot_events()
@@ -115,50 +118,46 @@ class Controller:
                 if plan_flaw is not None:
                     self.log_msg("Updating plan because of flaw: " + plan_flaw)
                     self.update_plan(robot_states, plan_flaw)
-                    for ii in range(len(self.robots)):
-                        self.robots[ii].set_plan(
-                            [
-                                (id, self.waypoints[id].location)
-                                for id in self.current_plan[ii]
-                            ]
-                        )
 
             self.publish_state(robot_states)
             time.sleep(0.5)
 
     def updates_from_robot_events(self):
-        for robot in self.robots:
+        for robot_idx, robot in enumerate(self.robots):
             for task_status in robot.get_event():
-                if task_status.waypoint >= len(self.waypoints):
-                    self.log_msg(f"WARNING: unknown waypoint id {task_status.waypoint}")
+                robot_plan = self.current_plan[robot_idx]
+                task_spec = robot_plan[task_status.task_id]
+
+                if task_spec != "charge" and task_spec >= len(self.waypoints):
+                    self.log_msg(
+                        f"WARNING: unknown waypoint id {task_spec}")
                     continue
 
                     # Mark the waypoint in the waypoint list.
                 if task_status.success:
                     self.log_msg(
-                        f"Successfully inspected waypoint {task_status.waypoint} with robot {robot.name}"
+                        f"Successfully completed task {task_status} => {task_spec} with robot {robot}"
                     )
-                    self.waypoints[task_status.waypoint].status = WaypointStatus.SUCCESS
+                    if task_spec != "charge":
+                        self.waypoints[task_spec].status = WaypointStatus.SUCCESS
                 else:
-                    self.log_msg(f"Failed to inspected waypoint {task_status.waypoint}")
-                    self.waypoints[task_status.waypoint].status = WaypointStatus.FAILURE
+                    self.log_msg(
+                        f"Failed to complete task {task_status} => {task_spec} with robot {robot}")
+                    if task_spec != "charge":
+                        self.waypoints[task_spec].status = WaypointStatus.FAILURE
 
-                    # Update the progress of the robot.
-                for robot_idx in range(len(self.robots)):
-                    robot_plan = self.current_plan[robot_idx]
-                    if task_status.waypoint in robot_plan:
-                        plan_idx = robot_plan.index(task_status.waypoint)
-                        progress = self.current_plan_progress[robot_idx]
-                        if plan_idx != progress:
-                            self.log_msg(
-                                f"Warning: robot finished task that was not the first planned."
-                            )
-                            robot_plan[plan_idx], robot_plan[progress] = (
-                                robot_plan[progress],
-                                robot_plan[plan_idx],
-                            )
+                plan_idx = robot_plan.index(task_spec)
+                progress = self.current_plan_progress[robot_idx]
+                if plan_idx != progress:
+                    self.log_msg(
+                        f"Warning: robot finished task that was not the first planned."
+                    )
+                    robot_plan[plan_idx], robot_plan[progress] = (
+                        robot_plan[progress],
+                        robot_plan[plan_idx],
+                    )
 
-                        self.current_plan_progress[robot_idx] += 1
+                self.current_plan_progress[robot_idx] += 1
 
     def log_msg(self, msg):
         self._mqtt_client.publish("planner/message", msg, retain=False)
@@ -174,11 +173,12 @@ class Controller:
         )
         planned_waypoints = frozenset(
             (
-                i
+                task_spec
                 for robot_plan, progress in zip(
                     self.current_plan, self.current_plan_progress
                 )
-                for i in robot_plan[progress:]
+                for task_spec in robot_plan[progress:]
+                if isinstance(task_spec, WaypointID)
             )
         )
 
@@ -198,6 +198,27 @@ class Controller:
         self.current_plan_progress = [0 for _ in new_plan]
         self.current_plan_version += 1
         self.current_plan_reason = plan_flaw
+        print(f"New plan: {self.current_plan}")
+        for ii in range(len(self.robots)):
+
+            def task_location(task: TaskSpec) -> Location:
+                if task == "charge":
+                    cl = robot_states[ii].battery_constraint.charger_location
+                    if cl is None:
+                        raise Exception(
+                            "Cannot charge with unknown charger location")
+                    else:
+                        return cl
+                else:
+                    waypoint_id = task
+                    return self.waypoints[waypoint_id].location
+
+            self.robots[ii].set_plan(
+                [
+                    (task_id, task_spec, task_location(task_spec))
+                    for task_id, task_spec in enumerate(self.current_plan[ii])
+                ]
+            )
 
     def set_status(self, s):
         if self.last_status_message == s:
@@ -213,7 +234,8 @@ class Controller:
         ):
             cost, plan = integrate_robot_plan(
                 robot_state,
-                [self.waypoints[i] for i in robot_plan[start_idx:]],
+                self.waypoints,
+                robot_plan[start_idx:]
             )
             total_cost += cost
             combined_plan.append(plan)
@@ -228,22 +250,21 @@ class Controller:
             self.current_plan_version,
             self.current_plan_reason,
         )
-        controllerstatus = ControllerStatus(self.waypoints, robot_states, planstatus)
+        controllerstatus = ControllerStatus(
+            self.waypoints, robot_states, planstatus)
 
         json_output = json_dumps_dataclass(controllerstatus)
         self._mqtt_client.publish("planner/status", json_output, retain=True)
 
 
 if __name__ == "__main__":
-    # with open("configuration.json") as f:
-    with open("configuration_virtual.json") as f:
-        # configuration = json.loads(f)
+    with open("configuration.json") as f:
         configuration = json.load(f)
     controller = Controller(configuration)
 
-    if configuration.get("autoload-waypoints", True):
+    if configuration.get("autoload-waypoints", False):
         # For some reason the mqtt client is not really listening yet
-        time.sleep(0.2)
+        time.sleep(0.5)
         load_default_waypoints()
 
     controller.main_loop()

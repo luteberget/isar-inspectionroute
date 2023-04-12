@@ -8,7 +8,7 @@ import time
 import json
 from typing import List, Optional, Tuple
 
-from model import BatteryConstraint, Location, RobotState, WaypointID
+from model import BatteryConstraint, Location, RobotParams, RobotState, TaskID, TaskSpec, WaypointID
 from robotbase import RobotBase, TaskStatus
 
 
@@ -74,18 +74,18 @@ class ISARRobot(RobotBase):
     robot_is_idle: bool = False
     robot_current_location: Optional[Location] = None
     robot_battery_level: float = 1.0
-    configuration = None
+    configuration: any  # type: ignore
 
     current_mission_id = None
     current_mission_tasks = None
     _mqtt_client = None
 
     recent_events: List[TaskStatus] = []
-    pending_set_plan :List[Tuple[WaypointID, Location]] | None = None
-    previous_set_plan_time :float = time.time()
+    pending_set_plan: List[Tuple[TaskID, TaskSpec, Location]] | None = None
+    previous_set_plan_time: float = time.time()
 
     charger_location: Location | None = None
-    robot_battery_distance: float = 10000.0
+    robot_battery_distance: float = float("inf")
 
     def __init__(self, configuration):
         # TODO parse charger location
@@ -93,6 +93,9 @@ class ISARRobot(RobotBase):
 
         self.configuration = configuration
         self._init_mqtt_interface()
+        self.params = RobotParams(float(configuration["speed"]), float(
+            configuration["rotation_speed"]))
+
         pass
 
     def get_state(self) -> RobotState:
@@ -103,31 +106,30 @@ class ISARRobot(RobotBase):
                 if ok:
                     self.pending_set_plan = None
 
-        return RobotState(self.robot_current_location, self.get_battery_constraint())
+        return RobotState(self.params, self.robot_current_location, self.get_battery_constraint())
 
     def get_event(self) -> List[TaskStatus]:
         value = self.recent_events
         self.recent_events = []
         return value
 
-    def get_battery_constraint(self) -> BatteryConstraint | None:
-        if self.charger_location is None:
-            return None
+    def get_battery_constraint(self) -> BatteryConstraint:
         return BatteryConstraint(
             self.charger_location,
             self.robot_battery_distance,
             self.robot_battery_level * self.robot_battery_distance,
         )
-    
-    def send_plan(self, waypoints :List[Tuple[WaypointID, Location]]):
-        self.pending_set_plan = waypoints
 
-    def set_isar_plan(self, waypoints :List[Tuple[WaypointID, Location]]) -> bool:
+    def set_plan(self, tasks: List[Tuple[TaskID, TaskSpec, Location]]):
+        self.pending_set_plan = tasks
+
+    def set_isar_plan(self, waypoints: List[Tuple[TaskID, TaskSpec, Location]]) -> bool:
         print(f"Trying to set ISAR plan {waypoints}")
 
         # First, cancel existing mission
         if self.current_mission_id is not None or not self.robot_is_idle:
-            url = urljoin(self.params.isar_url, "schedule/stop-mission")
+            url = urljoin(
+                self.configuration["isar_url"], "schedule/stop-mission")
             req = requests.post(url)
             print(f"Stopped {req}")
             if req.ok:
@@ -144,16 +146,13 @@ class ISARRobot(RobotBase):
             return False
 
         # Send the sequence as a mission to ISAR.
-        tasks = list(
-            map(lambda wp: convert_task_isar(f"wp{wp[0]}", wp[1]), waypoints)
-        )
         mission = {
             "mission_definition": {
-                "tasks": tasks,
+                "tasks": [convert_task_isar(f"wp{tid}", loc) for tid, _, loc in waypoints],
             }
         }
 
-        url = urljoin(self.params.isar_url, "schedule/start-mission")
+        url = urljoin(self.configuration["isar_url"], "schedule/start-mission")
         print(f"Sending ISAR command ({url}) to go to: {mission}")
         req = requests.post(url, json=mission)
         response = req.json()
@@ -183,7 +182,8 @@ class ISARRobot(RobotBase):
     def cancel_current_mission(self):
         # First, cancel existing mission
         if self.current_mission_id is not None or not self.robot_is_idle:
-            url = urljoin(self.configuration["isar-url"], "schedule/stop-mission")
+            url = urljoin(
+                self.configuration["isar-url"], "schedule/stop-mission")
             req = requests.post(url)
             print(f"Stopped {req}")
             if req.ok:
@@ -242,7 +242,8 @@ class ISARRobot(RobotBase):
                             task_msg["status"]
                         ):
                             success = task_msg["status"] == "successful"
-                            self.recent_events.append(TaskStatus(wp_id, success))
+                            self.recent_events.append(
+                                TaskStatus(wp_id, success))
 
             # TODO override battery
             # elif msg.topic == override_battery_level_topic:

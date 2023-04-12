@@ -42,18 +42,26 @@ pub struct PlanStatus {
     pub total_cost: f64,
     pub robot_plans: Vec<Vec<PlanStep>>,
     pub plan_version :u64,
+    pub plan_reason :Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BatteryConstraint {
-    pub charger_location: Location,
+    pub charger_location: Option<Location>,
     pub battery_distance: f64,
     pub remaining_distance: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RobotParams {
+    pub speed :f64,
+    pub rotation_speed :f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RobotState {
-    pub battery_constraint: Option<BatteryConstraint>,
+    pub parameters :RobotParams,
+    pub battery_constraint: BatteryConstraint,
     pub current_location: Option<Location>,
 }
 
