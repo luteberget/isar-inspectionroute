@@ -1,5 +1,11 @@
+use std::time::Instant;
+
 use eframe::{
-    egui::{self, plot::PlotPoints, Visuals},
+    egui::{
+        self,
+        plot::{Line, PlotBounds, PlotPoints},
+        Visuals,
+    },
     epaint::Color32,
 };
 use paho_mqtt::Receiver;
@@ -18,7 +24,7 @@ struct PlanApp {
 
     previous_plan: Option<PlanStatus>,
 
-    battery_history: Vec<Vec<(f64, f64)>>,
+    battery_history: Vec<Vec<(Instant, f64)>>,
     events: Vec<Vec<(f64, Event)>>,
 
     enable_send_waypoint: bool,
@@ -44,25 +50,31 @@ impl PlanApp {
             match msg.topic() {
                 "planner/status" => {
                     match serde_json::from_str::<ControllerStatus>(&msg.payload_str()) {
-                        Ok(x) => {
+                        Ok(new_status) => {
                             let previous_status = self.status.take();
 
                             if self.previous_plan.is_none()
                                 || self.previous_plan.as_ref().unwrap().plan_version
-                                    < x.plan.plan_version
+                                    < new_status.plan.plan_version
                             {
                                 self.previous_plan = previous_status.map(|x| x.plan);
                             }
 
-                            // for (idx, robot) in x.robots.iter().enumerate() {
-                            //     let time_now = todo!();
-                            //     self.battery_history[idx].push((
-                            //         time_now,
-                            //         robot.battery_constraint.unwrap().battery_distance,
-                            //     ));
-                            // }
+                            for (idx, new_robot_status) in new_status.robots.iter().enumerate() {
+                                let time_now = Instant::now();
 
-                            self.status = Some(x);
+                                while !(idx < self.battery_history.len()) {
+                                    self.battery_history.push(Default::default());
+                                }
+
+                                self.battery_history[idx].push((
+                                    time_now,
+                                    new_robot_status.battery_constraint.remaining_distance,
+                                ));
+                            }
+
+println!("{:?}", self.battery_history);
+                            self.status = Some(new_status);
                         }
                         Err(x) => {
                             println!("WARNING: could not parse status message {:?}", x);
@@ -83,169 +95,201 @@ impl PlanApp {
                 return;
             }
             let status = self.status.as_ref().unwrap();
+            let send_waypoint = &mut self.enable_send_waypoint;
 
-            egui::SidePanel::left("left_panel")
-                .min_width(500.0)
-                .max_width(500.0)
-                .show_inside(ui, |ui| {
-                    ui.checkbox(
-                        &mut self.enable_send_waypoint,
-                        "Click map to send waypoint.",
-                    );
-
-                    for (idx, robot) in status.robots.iter().enumerate() {
-                        ui.heading(&format!("Robot #{}", idx + 1));
-                        
-                        let battery_fraction = robot.battery_constraint.remaining_distance
-                        / robot.battery_constraint.battery_distance;
-                        
-                        ui.add(egui::ProgressBar::new(battery_fraction as f32).text(format!(
-                            "Battery level {:.2}/{:.2}",
-                            robot.battery_constraint.remaining_distance,
-                            robot.battery_constraint.battery_distance
-                        )));
-                        ui.end_row();
-
-                        ui.label(format!(
-                            "Battery charger location {:?}",
-                            robot.battery_constraint.charger_location
-                        ));
-                        
-                        if let Some(loc) = &robot.current_location {
-                            ui.label(format!("Location: {:?}", loc));
-                        } else {
-                            ui.label(format!("Location unknown"));
-                        }
-                    }
-
-                    ui.label(format!("Waypoints: {}", status.waypoints.len()));
-
-                    ui.label(format!("Solver: {}", &status.plan.solver));
-                    ui.label(format!("Plan cost: {:.2}", &status.plan.total_cost));
-                    for (i, robot_steps) in status.plan.robot_plans.iter().enumerate() {
-                        ui.heading(format!("Plan for robot {}", i + 1));
-                        for step in robot_steps.iter() {
-                            ui.label(format!(
-                                "Step {}: {}, batt:{:.2}",
-                                i, step.location.name, step.remaining_battery
-                            ));
-                        }
-                        // ui.label(format!("Solver: {}", &status.solver));
-                    }
-                });
-
-            // Map
-            ui.heading("Map");
-
-            for robot in status.robots.iter() {
-                let plot = egui::plot::Plot::new("map_plot").data_aspect(1.0);
-            }
-
-            let plot = egui::plot::Plot::new("map_plot").data_aspect(1.0);
-            // .custom_label_func(|name, value| {
-            //     if !name.is_empty() {
-            //         format!("{}: {:.*}%", name, 1, value.y)
-            //     } else {
-            //         "".to_string()
-            //     }
-            // })
-
-            plot.show(ui, |plot_ui| {
-                if self.enable_send_waypoint && plot_ui.plot_clicked() {
-
-                    // TODO
-                    // send_waypoint(plot_ui.pointer_coordinate());
-                    // self._mqtt_client.publish(msg);
-                }
-
-                // Current location.
-
-                for robot in status.robots.iter() {
-                    if let Some(loc) = robot.current_location.as_ref() {
-                        plot_ui.points(
-                            egui::plot::Points::new(PlotPoints::from([
-                                loc.pose.position.x,
-                                loc.pose.position.y,
-                            ]))
-                            .shape(egui::plot::MarkerShape::Diamond)
-                            .name("Current robot location")
-                            .color(eframe::epaint::Color32::DARK_RED)
-                            .radius(8.0),
-                        );
-                    }
-
-                    // Charger location
-                    if let Some(charger_location) =
-                        robot.battery_constraint.charger_location.as_ref()
-                    {
-                        let loc = &charger_location.pose;
-                        plot_ui.points(
-                            egui::plot::Points::new(PlotPoints::from([
-                                loc.position.x,
-                                loc.position.y,
-                            ]))
-                            .shape(egui::plot::MarkerShape::Circle)
-                            .name("Robot dock (charging)")
-                            .color(eframe::epaint::Color32::GREEN)
-                            .radius(8.0),
-                        );
-                    }
-                }
-
-                // Waypoints
-                for wp in status.waypoints.iter() {
-                    let (shape, color) = match (wp.is_charger, &wp.status) {
-                        (true, _) => (
-                            egui::plot::MarkerShape::Circle,
-                            eframe::epaint::Color32::DARK_GREEN,
-                        ),
-                        (false, WaypointStatus::Pending) => (
-                            egui::plot::MarkerShape::Asterisk,
-                            eframe::epaint::Color32::BLUE,
-                        ),
-                        (false, WaypointStatus::Success) => (
-                            egui::plot::MarkerShape::Cross,
-                            eframe::epaint::Color32::DARK_GREEN,
-                        ),
-                        (false, WaypointStatus::Failure) => (
-                            egui::plot::MarkerShape::Cross,
-                            eframe::epaint::Color32::DARK_RED,
-                        ),
-                    };
-
-                    plot_ui.points(
-                        egui::plot::Points::new(PlotPoints::from([
-                            wp.location.pose.position.x,
-                            wp.location.pose.position.y,
-                        ]))
-                        .name("POI")
-                        .shape(shape)
-                        .color(color)
-                        .radius(10.0),
-                    );
-                }
-
-                // Plan arrows
-                for (robot_idx, robot_plan) in status.plan.robot_plans.iter().enumerate() {
-                    let mut prev_loc = status.robots[robot_idx]
-                        .current_location
-                        .as_ref()
-                        .map(|l| &l.pose);
-
-                    for item in robot_plan.iter() {
-                        draw_arrow(plot_ui, prev_loc, &item.location.pose);
-                        prev_loc = Some(&item.location.pose);
-
-                        // // Arrow to dock
-                        // if let Some(dock) = app.dock.as_ref() {
-                        //     draw_arrow(plot_ui, prev_loc, &dock.pose);
-                        // }
-                        // prev_loc = app.dock.as_ref().map(|d| &d.pose);
-                    }
-                }
-            });
+            draw_sidebar(ui, send_waypoint, status);
+            draw_battery_histories(status, &self.battery_history, ui);
+            draw_map(ui, send_waypoint, status);
         });
     }
+}
+
+fn draw_map(ui: &mut egui::Ui, send_waypoint: &mut bool, status: &ControllerStatus) {
+    // Map
+    ui.heading("Map");
+    let plot = egui::plot::Plot::new("map_plot").data_aspect(1.0);
+
+    plot.show(ui, |plot_ui| {
+        if *send_waypoint && plot_ui.plot_clicked() {
+
+            // TODO
+            // send_waypoint(plot_ui.pointer_coordinate());
+            // self._mqtt_client.publish(msg);
+        }
+
+        // Current location.
+
+        for robot in status.robots.iter() {
+            if let Some(loc) = robot.current_location.as_ref() {
+                plot_ui.points(
+                    egui::plot::Points::new(PlotPoints::from([
+                        loc.pose.position.x,
+                        loc.pose.position.y,
+                    ]))
+                    .shape(egui::plot::MarkerShape::Diamond)
+                    .name("Current robot location")
+                    .color(eframe::epaint::Color32::DARK_RED)
+                    .radius(8.0),
+                );
+            }
+
+            // Charger location
+            if let Some(charger_location) = robot.battery_constraint.charger_location.as_ref() {
+                let loc = &charger_location.pose;
+                plot_ui.points(
+                    egui::plot::Points::new(PlotPoints::from([loc.position.x, loc.position.y]))
+                        .shape(egui::plot::MarkerShape::Circle)
+                        .name("Robot dock (charging)")
+                        .color(eframe::epaint::Color32::GREEN)
+                        .radius(8.0),
+                );
+            }
+        }
+
+        // Waypoints
+        for wp in status.waypoints.iter() {
+            let (shape, color) = match (wp.is_charger, &wp.status) {
+                (true, _) => (
+                    egui::plot::MarkerShape::Circle,
+                    eframe::epaint::Color32::DARK_GREEN,
+                ),
+                (false, WaypointStatus::Pending) => (
+                    egui::plot::MarkerShape::Asterisk,
+                    eframe::epaint::Color32::BLUE,
+                ),
+                (false, WaypointStatus::Success) => (
+                    egui::plot::MarkerShape::Cross,
+                    eframe::epaint::Color32::DARK_GREEN,
+                ),
+                (false, WaypointStatus::Failure) => (
+                    egui::plot::MarkerShape::Cross,
+                    eframe::epaint::Color32::DARK_RED,
+                ),
+            };
+
+            plot_ui.points(
+                egui::plot::Points::new(PlotPoints::from([
+                    wp.location.pose.position.x,
+                    wp.location.pose.position.y,
+                ]))
+                .name("POI")
+                .shape(shape)
+                .color(color)
+                .radius(10.0),
+            );
+        }
+
+        // Plan arrows
+        for (robot_idx, robot_plan) in status.plan.robot_plans.iter().enumerate() {
+            let mut prev_loc = status.robots[robot_idx]
+                .current_location
+                .as_ref()
+                .map(|l| &l.pose);
+
+            for item in robot_plan.iter() {
+                draw_arrow(plot_ui, prev_loc, &item.location.pose);
+                prev_loc = Some(&item.location.pose);
+            }
+        }
+    });
+}
+
+fn draw_battery_histories(
+    status: &ControllerStatus,
+    histories: &Vec<Vec<(Instant, f64)>>,
+    ui: &mut egui::Ui,
+) {
+    for ((robot_idx, robot), robplan) in status
+        .robots
+        .iter()
+        .enumerate()
+        .zip(status.plan.robot_plans.iter())
+    {
+        ui.heading(&format!("Robot #{}", robot_idx + 1));
+        let plot = egui::plot::Plot::new(format!("robhist{}", robot_idx)).height(200.0);
+
+        plot.show(ui, |plot_ui| {
+            plot_ui.set_plot_bounds(PlotBounds::from_min_max([-100.0, 0.0], [120.0, 0.0]));
+            // Plot future
+            let max_batt = robot.battery_constraint.battery_distance;
+
+            if let Some(history) = histories.get(robot_idx) {
+                let historic: PlotPoints = history
+                    .iter()
+                    .map(|(t, f)| [-(t.elapsed().as_secs_f64()), *f/ max_batt])
+                    .chain(std::iter::once([
+                        0.0,
+                        robot.battery_constraint.remaining_distance / max_batt,
+                    ]))
+                    .collect();
+
+                plot_ui.line(Line::new(historic));
+            } else {
+                println!("NO");
+            }
+
+            let batt_curve: PlotPoints =
+                std::iter::once([0.0, robot.battery_constraint.remaining_distance / max_batt])
+                    .chain(
+                        robplan
+                            .iter()
+                            .map(|p| [p.time, p.remaining_battery / max_batt]),
+                    )
+                    .collect();
+            plot_ui.line(Line::new(batt_curve));
+        });
+    }
+}
+
+fn draw_sidebar(ui: &mut egui::Ui, send_waypoint: &mut bool, status: &ControllerStatus) {
+    egui::SidePanel::left("left_panel")
+        .min_width(500.0)
+        .max_width(500.0)
+        .show_inside(ui, |ui| {
+            ui.checkbox(send_waypoint, "Click map to send waypoint.");
+
+            for (idx, robot) in status.robots.iter().enumerate() {
+                ui.heading(&format!("Robot #{}", idx + 1));
+
+                let battery_fraction = robot.battery_constraint.remaining_distance
+                    / robot.battery_constraint.battery_distance;
+
+                ui.add(
+                    egui::ProgressBar::new(battery_fraction as f32).text(format!(
+                        "Battery level {:.2}/{:.2}",
+                        robot.battery_constraint.remaining_distance,
+                        robot.battery_constraint.battery_distance
+                    )),
+                );
+                ui.end_row();
+
+                ui.label(format!(
+                    "Battery charger location {:?}",
+                    robot.battery_constraint.charger_location
+                ));
+
+                if let Some(loc) = &robot.current_location {
+                    ui.label(format!("Location: {:?}", loc));
+                } else {
+                    ui.label(format!("Location unknown"));
+                }
+            }
+
+            ui.label(format!("Waypoints: {}", status.waypoints.len()));
+
+            ui.label(format!("Solver: {}", &status.plan.solver));
+            ui.label(format!("Plan cost: {:.2}", &status.plan.total_cost));
+            for (i, robot_steps) in status.plan.robot_plans.iter().enumerate() {
+                ui.heading(format!("Plan for robot {}", i + 1));
+                for step in robot_steps.iter() {
+                    ui.label(format!(
+                        "Step {}: {}, batt:{:.2}",
+                        i, step.location.name, step.remaining_battery
+                    ));
+                }
+                // ui.label(format!("Solver: {}", &status.solver));
+            }
+        });
 }
 
 impl eframe::App for PlanApp {
@@ -295,5 +339,6 @@ fn main() {
             ctx.egui_ctx.set_visuals(Visuals::light());
             Box::new(app)
         }),
-    );
+    )
+    .unwrap();
 }

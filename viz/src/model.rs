@@ -33,6 +33,7 @@ pub struct Location {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PlanStep {
     pub location: Location,
+    pub time :f64,
     pub remaining_battery: f64,
 }
 

@@ -66,6 +66,7 @@ class RobotState:
 @dataclass
 class PlanStep:
     location: Location
+    time: float
     remaining_battery: float
 
 
@@ -84,13 +85,15 @@ class ControllerStatus:
     robots: List[RobotState]
     plan: PlanStatus
 
+
 TaskSpec = Literal["charge"] | WaypointID
+
 
 def mk_pose(x, y, z=0.0) -> Pose:
     return Pose(
-        position=Position(x, y, z, frame=None), # type: ignore
-        orientation=Orientation(0, 0, 0, 1, frame=None), # type: ignore
-        frame=None, # type: ignore
+        position=Position(x, y, z, frame=None),  # type: ignore
+        orientation=Orientation(0, 0, 0, 1, frame=None),  # type: ignore
+        frame=None,  # type: ignore
     )
 
 
@@ -156,14 +159,16 @@ def loc_string(location: Location):
 def integrate_robot_plan(state: RobotState, waypoints: List[Waypoint], tasks: List[TaskSpec]):
     if state.current_location is None:
         raise Exception("Cannot integrate robot plan with unknown position.")
-    
+
     cost = 0
+    time = 0
     battery = state.battery_constraint.remaining_distance
     prev_loc = state.current_location
     plan = []
 
     for task in tasks:
-        location = state.battery_constraint.charger_location if task == "charge" else waypoints[task].location
+        location = state.battery_constraint.charger_location if task == "charge" else waypoints[
+            task].location
         if location is None:
             raise Exception("Location error")
         d = calculate_distance(prev_loc, location)
@@ -176,8 +181,10 @@ def integrate_robot_plan(state: RobotState, waypoints: List[Waypoint], tasks: Li
                 "at",
                 loc_string(location),
             )
-        plan.append(PlanStep(location, battery))
+        time += d/state.parameters.speed
+        plan.append(PlanStep(location, time, battery))
         if task == "charge":
             battery = state.battery_constraint.battery_distance
+            plan.append(PlanStep(location, time, battery))
         prev_loc = location
     return cost, plan
