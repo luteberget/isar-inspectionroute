@@ -54,13 +54,13 @@ impl PlanApp {
                                 self.previous_plan = previous_status.map(|x| x.plan);
                             }
 
-                            for (idx, robot) in x.robots.iter().enumerate() {
-                                let time_now = todo!();
-                                self.battery_history[idx].push((
-                                    time_now,
-                                    robot.battery_constraint.unwrap().battery_distance,
-                                ));
-                            }
+                            // for (idx, robot) in x.robots.iter().enumerate() {
+                            //     let time_now = todo!();
+                            //     self.battery_history[idx].push((
+                            //         time_now,
+                            //         robot.battery_constraint.unwrap().battery_distance,
+                            //     ));
+                            // }
 
                             self.status = Some(x);
                         }
