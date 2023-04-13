@@ -3,8 +3,8 @@ use std::time::Instant;
 use eframe::{
     egui::{
         self,
-        plot::{Line, PlotBounds, PlotPoints},
-        Visuals,
+        plot::{Line, PlotBounds, PlotPoint, PlotPoints, Text},
+        RichText, Visuals,
     },
     epaint::Color32,
 };
@@ -22,7 +22,7 @@ struct PlanApp {
     mqtt_receiver: Receiver<Option<paho_mqtt::Message>>,
     status: Option<ControllerStatus>,
 
-    previous_plan: Option<PlanStatus>,
+    previous_plan: Option<(Instant, PlanStatus)>,
 
     battery_history: Vec<Vec<(Instant, f64)>>,
     events: Vec<Vec<(f64, Event)>>,
@@ -32,7 +32,7 @@ struct PlanApp {
     num_points_sent: usize,
 }
 
-fn draw_arrow(ui: &mut egui::plot::PlotUi, from: Option<&Pose>, to: &Pose) {
+fn draw_arrow(ui: &mut egui::plot::PlotUi, from: Option<&Pose>, to: &Pose, color: Color32) {
     ui.arrows(
         egui::plot::Arrows::new(
             [
@@ -41,7 +41,7 @@ fn draw_arrow(ui: &mut egui::plot::PlotUi, from: Option<&Pose>, to: &Pose) {
             ],
             [to.position.x, to.position.y],
         )
-        .color(Color32::BLACK),
+        .color(color),
     );
 }
 
@@ -57,12 +57,16 @@ impl PlanApp {
                     match serde_json::from_str::<ControllerStatus>(&msg.payload_str()) {
                         Ok(new_status) => {
                             let previous_status = self.status.take();
-
-                            if self.previous_plan.is_none()
-                                || self.previous_plan.as_ref().unwrap().plan_version
-                                    < new_status.plan.plan_version
+                            println!("Plan versoin {}", new_status.plan.plan_version);
+                            if previous_status
+                                .as_ref()
+                                .map(|p| p.plan.plan_version != new_status.plan.plan_version)
+                                .unwrap_or(true)
                             {
-                                self.previous_plan = previous_status.map(|x| x.plan);
+                                self.previous_plan =
+                                    previous_status.map(|x| (Instant::now(), x.plan));
+
+                                println!("Saved previous plan");
                             }
 
                             for (idx, new_robot_status) in new_status.robots.iter().enumerate() {
@@ -78,7 +82,7 @@ impl PlanApp {
                                 ));
                             }
 
-                            println!("{:?}", self.battery_history);
+                            // println!("{:?}", self.battery_history);
                             self.status = Some(new_status);
                         }
                         Err(x) => {
@@ -103,16 +107,29 @@ impl PlanApp {
             let send_waypoint = &mut self.enable_send_waypoint;
             let enable_planning = &mut self.enable_planning;
 
-            draw_sidebar(ui, send_waypoint, enable_planning, status, |p| {
-                let msg = paho_mqtt::MessageBuilder::new()
-                    .topic("planner/enable_planning")
-                    .payload(if p { "true" } else { "false" })
-                    .retained(true);
-                self._mqtt_client.publish(msg.finalize()).unwrap();
+            let previous_plan = self.previous_plan.as_ref().map(|(t, p)| {
+                let factor = (t.elapsed().as_secs_f32() / 5.0).clamp(0.0, 1.0);
+                println!("Factor {}", factor);
+                (factor, p)
             });
 
-            draw_battery_histories(status, &self.battery_history, ui);
-            draw_map(ui, send_waypoint, status, |x, y| {
+            draw_sidebar(
+                ui,
+                send_waypoint,
+                enable_planning,
+                status,
+                previous_plan,
+                |p| {
+                    let msg = paho_mqtt::MessageBuilder::new()
+                        .topic("planner/enable_planning")
+                        .payload(if p { "true" } else { "false" })
+                        .retained(true);
+                    self._mqtt_client.publish(msg.finalize()).unwrap();
+                },
+            );
+
+            draw_battery_histories(status, previous_plan, &self.battery_history, ui);
+            draw_map(ui, send_waypoint, status, previous_plan, |x, y| {
                 let value = serde_json::json!({
                     "name": format!("click{}", self.num_points_sent),
                     "x": x,
@@ -134,6 +151,7 @@ fn draw_map(
     ui: &mut egui::Ui,
     send_waypoint: &mut bool,
     status: &ControllerStatus,
+    previous_plan: Option<(f32, &PlanStatus)>,
     mut send_pt: impl FnMut(f64, f64),
 ) {
     // Map
@@ -208,6 +226,31 @@ fn draw_map(
             );
         }
 
+        let mut plan_color = Color32::BLACK;
+
+        if let Some((color_factor, previous_plan)) = previous_plan {
+            let byte = ((1.0 - color_factor) * 255.0) as u8;
+            plan_color = Color32::from_rgb(byte, 0, 0);
+
+            if byte > 0 {
+                let old_plan_color = Color32::from_black_alpha(byte);
+
+                // Plan arrows
+                for (robot_idx, robot_plan) in previous_plan.robot_plans.iter().enumerate() {
+                    let mut prev_loc = status
+                        .robots
+                        .get(robot_idx)
+                        .and_then(|n| n.current_location.as_ref())
+                        .map(|l| &l.pose);
+
+                    for item in robot_plan.iter() {
+                        draw_arrow(plot_ui, prev_loc, &item.location.pose, old_plan_color);
+                        prev_loc = Some(&item.location.pose);
+                    }
+                }
+            }
+        }
+
         // Plan arrows
         for (robot_idx, robot_plan) in status.plan.robot_plans.iter().enumerate() {
             let mut prev_loc = status.robots[robot_idx]
@@ -216,7 +259,7 @@ fn draw_map(
                 .map(|l| &l.pose);
 
             for item in robot_plan.iter() {
-                draw_arrow(plot_ui, prev_loc, &item.location.pose);
+                draw_arrow(plot_ui, prev_loc, &item.location.pose, plan_color);
                 prev_loc = Some(&item.location.pose);
             }
         }
@@ -225,6 +268,7 @@ fn draw_map(
 
 fn draw_battery_histories(
     status: &ControllerStatus,
+    previous_plan: Option<(f32, &PlanStatus)>,
     histories: &Vec<Vec<(Instant, f64)>>,
     ui: &mut egui::Ui,
 ) {
@@ -252,11 +296,33 @@ fn draw_battery_histories(
                     ]))
                     .collect();
 
-                plot_ui.line(Line::new(historic));
+                plot_ui.line(Line::new(historic).color(Color32::DARK_BLUE));
             } else {
                 println!("NO");
             }
 
+            let mut plan_color = Color32::BLACK;
+            if let Some((color_factor, previous_plan)) = previous_plan {
+                if let Some(old_curve) = previous_plan.robot_plans.get(robot_idx) {
+                    let byte = ((1.0 - color_factor) * 255.0) as u8;
+                    plan_color = Color32::from_rgb(byte, 0, 0);
+
+                    if byte > 0 {
+                        let old_plan_color = Color32::from_black_alpha(byte);
+                        let old_battery_curve: PlotPoints = std::iter::once([
+                            0.0,
+                            robot.battery_constraint.remaining_distance / max_batt,
+                        ])
+                        .chain(
+                            old_curve
+                                .iter()
+                                .map(|p| [p.time, p.remaining_battery / max_batt]),
+                        )
+                        .collect();
+                        plot_ui.line(Line::new(old_battery_curve).color(old_plan_color));
+                    }
+                }
+            }
             let batt_curve: PlotPoints =
                 std::iter::once([0.0, robot.battery_constraint.remaining_distance / max_batt])
                     .chain(
@@ -265,7 +331,7 @@ fn draw_battery_histories(
                             .map(|p| [p.time, p.remaining_battery / max_batt]),
                     )
                     .collect();
-            plot_ui.line(Line::new(batt_curve));
+            plot_ui.line(Line::new(batt_curve).color(plan_color));
         });
     }
 }
@@ -275,6 +341,7 @@ fn draw_sidebar(
     send_waypoint: &mut bool,
     enable_planning: &mut bool,
     status: &ControllerStatus,
+    previous_plan: Option<(f32, &PlanStatus)>,
     mut set_planning_enabled: impl FnMut(bool),
 ) {
     egui::SidePanel::left("left_panel")
@@ -283,6 +350,16 @@ fn draw_sidebar(
         .show_inside(ui, |ui| {
             ui.heading("Planner");
             ui.label(format!("Status: {}", status.plan.status_msg));
+
+            if let Some((color_factor, plan)) = previous_plan {
+                let byte = ((1.0 - color_factor) * 255.0) as u8;
+                if byte > 0 {
+                    let color = Color32::from_rgba_premultiplied(255, 0, 0, byte);
+                    if let Some(reason) = plan.plan_reason.as_ref() {
+                        ui.heading(RichText::new(reason).color(color));
+                    }
+                }
+            }
 
             if ui.checkbox(enable_planning, "Enable planning.").changed() {
                 set_planning_enabled(*enable_planning);
