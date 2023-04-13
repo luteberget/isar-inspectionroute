@@ -21,7 +21,8 @@
                 "y": 2.5
             },
             "battery_distance": 5,
-            "remaining_distance": 5
+            "remaining_distance": 5,
+            "capabilities": ["thermal_camera", "rgb_camera"]
         },
         {
             "name": "Sigrid",
@@ -39,7 +40,8 @@
                 "y": 2.5
             },
             "battery_distance": 5,
-            "remaining_distance": 5
+            "remaining_distance": 5,
+            "capabilities": ["rgb_camera"]
         }
     ]
 }

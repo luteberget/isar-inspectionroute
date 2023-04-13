@@ -75,6 +75,7 @@ class ISARRobot(RobotBase):
     robot_current_location: Optional[Location] = None
     robot_battery_level: float = 1.0
     configuration: any  # type: ignore
+    capabilities :List[str]
 
     current_mission_id = None
     current_mission_tasks = None
@@ -94,7 +95,8 @@ class ISARRobot(RobotBase):
         self.configuration = configuration
         self._init_mqtt_interface()
         self.params = RobotParams(float(configuration["speed"]), float(
-            configuration["rotation_speed"]))
+            configuration["rotation_speed"]),
+            configuration["capabilities"])
 
         pass
 

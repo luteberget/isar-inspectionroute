@@ -42,6 +42,7 @@ class Waypoint:
     status: WaypointStatus
     is_charger: bool
     location: Location
+    capabilities :List[str]
 
 
 @dataclass
@@ -55,6 +56,7 @@ class BatteryConstraint:
 class RobotParams:
     speed: float
     rotation_speed: float
+    capabilities :List[str]
 
 
 @dataclass

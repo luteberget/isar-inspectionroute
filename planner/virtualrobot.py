@@ -29,7 +29,8 @@ class VirtualRobot(RobotBase):
         self.name = conf["name"]
         self.time = datetime.now()
         self.current_state = RobotState(
-            RobotParams(float(conf["speed"]), float(conf["rotation_speed"])),
+            RobotParams(float(conf["speed"]), float(
+                conf["rotation_speed"]), conf["capabilities"]),
             Location(conf["init_loc"]["name"], mk_pose(
                 conf["init_loc"]["x"], conf["init_loc"]["y"])),
             BatteryConstraint(

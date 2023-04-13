@@ -94,6 +94,7 @@ class Controller:
                     and "x" in state_msg
                     and "y" in state_msg
                     and "z" in state_msg
+                    and "capabilities" in state_msg
                 )
                 self.log_msg(f"Received new waypoint: {msg.payload}")
 
@@ -106,7 +107,7 @@ class Controller:
                                 state_msg["y"], state_msg["z"]),
                     )
                     self.waypoints.append(
-                        Waypoint(WaypointStatus.PENDING, False, loc),
+                        Waypoint(WaypointStatus.PENDING, False, loc, state_msg["capabilities"]),
                     )
 
         client = mqtt.Client()

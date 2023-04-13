@@ -21,7 +21,7 @@ def load_default_waypoints():
     for idx, pt_2d in enumerate(points_2d):
         mqtt.single(
             mqtt_planner_add_waypoint_topic,
-            json.dumps({"name": f"pt{idx}", "x": pt_2d[0], "y": pt_2d[1], "z": 0.0}),
+            json.dumps({"name": f"pt{idx}", "x": pt_2d[0], "y": pt_2d[1], "z": 0.0, "capabilities": []}),
         )
 
 

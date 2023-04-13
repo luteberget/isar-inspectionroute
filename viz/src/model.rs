@@ -58,6 +58,7 @@ pub struct BatteryConstraint {
 pub struct RobotParams {
     pub speed :f64,
     pub rotation_speed :f64,
+    pub capabilities :Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -79,6 +80,7 @@ pub struct Waypoint {
     pub status: WaypointStatus,
     pub is_charger: bool,
     pub location: Location,
+    pub capabilities :Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

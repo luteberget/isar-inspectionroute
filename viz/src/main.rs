@@ -29,6 +29,8 @@ struct PlanApp {
 
     enable_send_waypoint: bool,
     enable_planning: bool,
+    require_thermal_camera: bool,
+    require_rgb_camera: bool,
     num_points_sent: usize,
 }
 
@@ -107,6 +109,9 @@ impl PlanApp {
             let send_waypoint = &mut self.enable_send_waypoint;
             let enable_planning = &mut self.enable_planning;
 
+            let require_rgb_camera = &mut self.require_rgb_camera;
+            let require_thermal_camera = &mut self.require_thermal_camera;
+
             let previous_plan = self.previous_plan.as_ref().map(|(t, p)| {
                 let factor = (t.elapsed().as_secs_f32() / 5.0).clamp(0.0, 1.0);
                 println!("Factor {}", factor);
@@ -117,6 +122,8 @@ impl PlanApp {
                 ui,
                 send_waypoint,
                 enable_planning,
+                require_rgb_camera,
+                require_thermal_camera,
                 status,
                 previous_plan,
                 |p| {
@@ -130,11 +137,20 @@ impl PlanApp {
 
             draw_battery_histories(status, previous_plan, &self.battery_history, ui);
             draw_map(ui, send_waypoint, status, previous_plan, |x, y| {
+                let mut cs: Vec<String> = vec![];
+                if self.require_rgb_camera {
+                    cs.push("rgb_camera".to_string());
+                }
+                if self.require_thermal_camera {
+                    cs.push("thermal_camera".to_string());
+                }
+
                 let value = serde_json::json!({
                     "name": format!("click{}", self.num_points_sent),
                     "x": x,
                     "y": y,
-                    "z": 0.0
+                    "z": 0.0,
+                    "capabilities": cs,
                 });
                 let string = serde_json::to_string(&value).unwrap();
                 let msg = paho_mqtt::MessageBuilder::new()
@@ -340,6 +356,8 @@ fn draw_sidebar(
     ui: &mut egui::Ui,
     send_waypoint: &mut bool,
     enable_planning: &mut bool,
+    require_rgb_camera: &mut bool,
+    require_thermal_camera: &mut bool,
     status: &ControllerStatus,
     previous_plan: Option<(f32, &PlanStatus)>,
     mut set_planning_enabled: impl FnMut(bool),
@@ -351,11 +369,11 @@ fn draw_sidebar(
             ui.heading("Planner");
             ui.label(format!("Status: {}", status.plan.status_msg));
 
-            if let Some((color_factor, plan)) = previous_plan {
+            if let Some((color_factor, _plan)) = previous_plan {
                 let byte = ((1.0 - color_factor) * 255.0) as u8;
                 if byte > 0 {
                     let color = Color32::from_rgba_premultiplied(255, 0, 0, byte);
-                    if let Some(reason) = plan.plan_reason.as_ref() {
+                    if let Some(reason) = status.plan.plan_reason.as_ref() {
                         ui.heading(RichText::new(reason).color(color));
                     }
                 }
@@ -366,6 +384,8 @@ fn draw_sidebar(
             }
 
             ui.checkbox(send_waypoint, "Click map to send waypoint.");
+            ui.checkbox(require_rgb_camera, "New waypoint requires RGB camera.");
+            ui.checkbox(require_thermal_camera, "New waypoint requires thermal camera.");
 
             for (idx, robot) in status.robots.iter().enumerate() {
                 ui.heading(&format!("Robot #{}", idx + 1));
@@ -381,6 +401,8 @@ fn draw_sidebar(
                     )),
                 );
                 ui.end_row();
+
+                ui.label(format!("Robot parameters {:?}", robot.parameters));
 
                 ui.label(format!(
                     "Battery charger location {:?}",
@@ -452,6 +474,8 @@ fn main() {
         enable_send_waypoint: false,
         enable_planning: false,
         num_points_sent: 0,
+        require_rgb_camera: false,
+        require_thermal_camera: false,
     };
 
     eframe::run_native(
