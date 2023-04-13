@@ -20,6 +20,7 @@ from model import (
     json_dumps_dataclass,
     mk_pose,
     mqtt_planner_add_waypoint_topic,
+    mqtt_planner_planning_enabled_topic
 )
 
 from planner_greedy import greedy_sequence
@@ -32,9 +33,12 @@ class Controller:
     robots: List[RobotBase] = []
     last_status_message: Optional[str] = None
     current_plan_progress: List[int] = []
+    plan_forced_dirty = True
     current_plan: List[List[TaskSpec]] = []
     current_plan_version: int = 0
     current_plan_reason: str | None = None
+    use_planning_enabled_message: bool
+    planning_enabled: bool
 
     def __init__(self, configuration):
         print("Loading configuration:", json.dumps(configuration, indent=2))
@@ -57,6 +61,10 @@ class Controller:
             self.current_plan.append([])
             self.current_plan_progress.append(0)
 
+        self.use_planning_enabled_message = configuration.get(
+            "use-planning-enabled-message", False)
+        self.planning_enabled = not self.use_planning_enabled_message
+
         self._init_mqtt(configuration)
         self.publish_state([])
 
@@ -69,9 +77,17 @@ class Controller:
             # Subscribing in on_connect() means that if we lose the connection and
             # reconnect then subscriptions will be renewed.
             client.subscribe(mqtt_planner_add_waypoint_topic)
+            client.subscribe(mqtt_planner_planning_enabled_topic)
 
         def mqtt_message(client, userdata, msg):
-            if msg.topic == mqtt_planner_add_waypoint_topic:
+            if msg.topic == mqtt_planner_planning_enabled_topic:
+                if self.use_planning_enabled_message:
+                    self.planning_enabled = msg.payload.decode(
+                        "utf-8") == "true"
+                    if self.planning_enabled:
+                        self.plan_forced_dirty = True
+
+            elif msg.topic == mqtt_planner_add_waypoint_topic:
                 state_msg = json.loads(msg.payload)
                 msg_ok = (
                     "name" in state_msg
@@ -111,9 +127,14 @@ class Controller:
             robot_states = [robot.get_state() for robot in self.robots]
             self.updates_from_robot_events()
 
-            if not all(self.robot_ready(s) for s in robot_states):
-                self.set_status("Waiting for robot state information.")
+            robots_ready = all(self.robot_ready(s) for s in robot_states)
+
+            if not robots_ready:
+                self.set_status("Waiting for robots to be ready.")
+            elif not self.planning_enabled:
+                self.set_status("Planning is disabled")
             else:
+                self.set_status("Planning enabled.")
                 plan_flaw = self.is_plan_valid(robot_states)
                 if plan_flaw is not None:
                     self.log_msg("Updating plan because of flaw: " + plan_flaw)
@@ -164,6 +185,11 @@ class Controller:
         print(msg)
 
     def is_plan_valid(self, robot_states: List[RobotState]):
+
+        if self.plan_forced_dirty:
+            self.plan_forced_dirty = False
+            return "First plan."
+
         pending_waypoints = frozenset(
             (
                 i
@@ -244,6 +270,7 @@ class Controller:
     def publish_state(self, robot_states: List[RobotState]):
         total_cost, combined_plan = self.integrate_plan(robot_states)
         planstatus = PlanStatus(
+            self.last_status_message or "",
             self.planner_name,
             total_cost,
             combined_plan,

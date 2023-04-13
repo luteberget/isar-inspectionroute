@@ -4,7 +4,7 @@
  * basic use case: distributing tasks (X) 
  * viz: battery level history  (X)
  * viz: send new waypoint (X)
- * viz: start/stop planning?
+ * viz: start/stop planning? (X)
  * viz: plan updates with reason text
  * testing with isar
  * testing with isar-turtlebot

@@ -39,6 +39,7 @@ pub struct PlanStep {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PlanStatus {
+    pub status_msg :String,
     pub solver: String,
     pub total_cost: f64,
     pub robot_plans: Vec<Vec<PlanStep>>,

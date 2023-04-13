@@ -8,7 +8,7 @@ use eframe::{
     },
     epaint::Color32,
 };
-use paho_mqtt::{Message, Receiver};
+use paho_mqtt::Receiver;
 mod model;
 use model::*;
 
@@ -28,6 +28,7 @@ struct PlanApp {
     events: Vec<Vec<(f64, Event)>>,
 
     enable_send_waypoint: bool,
+    enable_planning: bool,
     num_points_sent: usize,
 }
 
@@ -49,6 +50,9 @@ impl PlanApp {
         while let Ok(Some(msg)) = self.mqtt_receiver.try_recv() {
             println!("topic {} payload {}", msg.topic(), msg.payload_str());
             match msg.topic() {
+                "planner/enable_planning" => {
+                    self.enable_planning = msg.payload_str() == "true";
+                }
                 "planner/status" => {
                     match serde_json::from_str::<ControllerStatus>(&msg.payload_str()) {
                         Ok(new_status) => {
@@ -97,8 +101,16 @@ impl PlanApp {
             }
             let status = self.status.as_ref().unwrap();
             let send_waypoint = &mut self.enable_send_waypoint;
+            let enable_planning = &mut self.enable_planning;
 
-            draw_sidebar(ui, send_waypoint, status);
+            draw_sidebar(ui, send_waypoint, enable_planning, status, |p| {
+                let msg = paho_mqtt::MessageBuilder::new()
+                    .topic("planner/enable_planning")
+                    .payload(if p { "true" } else { "false" })
+                    .retained(true);
+                self._mqtt_client.publish(msg.finalize()).unwrap();
+            });
+
             draw_battery_histories(status, &self.battery_history, ui);
             draw_map(ui, send_waypoint, status, |x, y| {
                 let value = serde_json::json!({
@@ -130,18 +142,25 @@ fn draw_map(
 
     plot.show(ui, |plot_ui| {
         if *send_waypoint && plot_ui.plot_clicked() {
-            println!("Send {:?}", plot_ui.pointer_coordinate());
             if let Some(pt) = plot_ui.pointer_coordinate() {
                 send_pt(pt.x, pt.y)
             }
-            // TODO
-            // send_waypoint(plot_ui.pointer_coordinate());
-            // self._mqtt_client.publish(msg);
         }
 
         // Current location.
-
         for robot in status.robots.iter() {
+            // Charger location
+            if let Some(charger_location) = robot.battery_constraint.charger_location.as_ref() {
+                let loc = &charger_location.pose;
+                plot_ui.points(
+                    egui::plot::Points::new(PlotPoints::from([loc.position.x, loc.position.y]))
+                        .shape(egui::plot::MarkerShape::Circle)
+                        .name("Robot dock (charging)")
+                        .color(eframe::epaint::Color32::GREEN)
+                        .radius(8.0),
+                );
+            }
+
             if let Some(loc) = robot.current_location.as_ref() {
                 plot_ui.points(
                     egui::plot::Points::new(PlotPoints::from([
@@ -152,18 +171,6 @@ fn draw_map(
                     .name("Current robot location")
                     .color(eframe::epaint::Color32::DARK_RED)
                     .radius(8.0),
-                );
-            }
-
-            // Charger location
-            if let Some(charger_location) = robot.battery_constraint.charger_location.as_ref() {
-                let loc = &charger_location.pose;
-                plot_ui.points(
-                    egui::plot::Points::new(PlotPoints::from([loc.position.x, loc.position.y]))
-                        .shape(egui::plot::MarkerShape::Circle)
-                        .name("Robot dock (charging)")
-                        .color(eframe::epaint::Color32::GREEN)
-                        .radius(8.0),
                 );
             }
         }
@@ -263,11 +270,24 @@ fn draw_battery_histories(
     }
 }
 
-fn draw_sidebar(ui: &mut egui::Ui, send_waypoint: &mut bool, status: &ControllerStatus) {
+fn draw_sidebar(
+    ui: &mut egui::Ui,
+    send_waypoint: &mut bool,
+    enable_planning: &mut bool,
+    status: &ControllerStatus,
+    mut set_planning_enabled: impl FnMut(bool),
+) {
     egui::SidePanel::left("left_panel")
         .min_width(500.0)
         .max_width(500.0)
         .show_inside(ui, |ui| {
+            ui.heading("Planner");
+            ui.label(format!("Status: {}", status.plan.status_msg));
+
+            if ui.checkbox(enable_planning, "Enable planning.").changed() {
+                set_planning_enabled(*enable_planning);
+            }
+
             ui.checkbox(send_waypoint, "Click map to send waypoint.");
 
             for (idx, robot) in status.robots.iter().enumerate() {
@@ -337,6 +357,7 @@ fn main() {
     match mqtt_client.connect(mqtt_conn_opts) {
         Ok(_res) => {
             mqtt_client.subscribe("planner/status", 0).unwrap();
+            mqtt_client.subscribe("planner/enable_planning", 0).unwrap();
             println!("Connected to MQTT.")
         }
         Err(_msg) => {
@@ -352,6 +373,7 @@ fn main() {
         events: vec![],
         previous_plan: None,
         enable_send_waypoint: false,
+        enable_planning: false,
         num_points_sent: 0,
     };
 

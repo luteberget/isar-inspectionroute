@@ -7,6 +7,7 @@ import dataclasses
 import json
 
 mqtt_planner_add_waypoint_topic: str = "planner/add_waypoint"
+mqtt_planner_planning_enabled_topic: str = "planner/enable_planning"
 
 
 WaypointID = int
@@ -72,6 +73,7 @@ class PlanStep:
 
 @dataclass
 class PlanStatus:
+    status_msg :str
     solver: str
     total_cost: float
     robot_plans: List[List[PlanStep]]

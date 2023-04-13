@@ -3,6 +3,7 @@
     "mqtt-hostname": "localhost",
     "mqtt-port": null,
     "autoload-waypoints": true,
+    "use-planning-enabled-message": true,
     "robots": [
         {
             "name": "Ronny",
