@@ -3,7 +3,8 @@
  * charging solver (X)
  * basic use case: distributing tasks (X) 
  * viz: battery level history  (X)
- * viz: send new waypoint
+ * viz: send new waypoint (X)
+ * viz: start/stop planning?
  * viz: plan updates with reason text
  * testing with isar
  * testing with isar-turtlebot

@@ -8,7 +8,7 @@ use eframe::{
     },
     epaint::Color32,
 };
-use paho_mqtt::Receiver;
+use paho_mqtt::{Message, Receiver};
 mod model;
 use model::*;
 
@@ -28,6 +28,7 @@ struct PlanApp {
     events: Vec<Vec<(f64, Event)>>,
 
     enable_send_waypoint: bool,
+    num_points_sent: usize,
 }
 
 fn draw_arrow(ui: &mut egui::plot::PlotUi, from: Option<&Pose>, to: &Pose) {
@@ -73,7 +74,7 @@ impl PlanApp {
                                 ));
                             }
 
-println!("{:?}", self.battery_history);
+                            println!("{:?}", self.battery_history);
                             self.status = Some(new_status);
                         }
                         Err(x) => {
@@ -99,19 +100,40 @@ println!("{:?}", self.battery_history);
 
             draw_sidebar(ui, send_waypoint, status);
             draw_battery_histories(status, &self.battery_history, ui);
-            draw_map(ui, send_waypoint, status);
+            draw_map(ui, send_waypoint, status, |x, y| {
+                let value = serde_json::json!({
+                    "name": format!("click{}", self.num_points_sent),
+                    "x": x,
+                    "y": y,
+                    "z": 0.0
+                });
+                let string = serde_json::to_string(&value).unwrap();
+                let msg = paho_mqtt::MessageBuilder::new()
+                    .topic("planner/add_waypoint")
+                    .payload(string);
+                self._mqtt_client.publish(msg.finalize()).unwrap();
+                self.num_points_sent += 1;
+            });
         });
     }
 }
 
-fn draw_map(ui: &mut egui::Ui, send_waypoint: &mut bool, status: &ControllerStatus) {
+fn draw_map(
+    ui: &mut egui::Ui,
+    send_waypoint: &mut bool,
+    status: &ControllerStatus,
+    mut send_pt: impl FnMut(f64, f64),
+) {
     // Map
     ui.heading("Map");
     let plot = egui::plot::Plot::new("map_plot").data_aspect(1.0);
 
     plot.show(ui, |plot_ui| {
         if *send_waypoint && plot_ui.plot_clicked() {
-
+            println!("Send {:?}", plot_ui.pointer_coordinate());
+            if let Some(pt) = plot_ui.pointer_coordinate() {
+                send_pt(pt.x, pt.y)
+            }
             // TODO
             // send_waypoint(plot_ui.pointer_coordinate());
             // self._mqtt_client.publish(msg);
@@ -216,7 +238,7 @@ fn draw_battery_histories(
             if let Some(history) = histories.get(robot_idx) {
                 let historic: PlotPoints = history
                     .iter()
-                    .map(|(t, f)| [-(t.elapsed().as_secs_f64()), *f/ max_batt])
+                    .map(|(t, f)| [-(t.elapsed().as_secs_f64()), *f / max_batt])
                     .chain(std::iter::once([
                         0.0,
                         robot.battery_constraint.remaining_distance / max_batt,
@@ -330,6 +352,7 @@ fn main() {
         events: vec![],
         previous_plan: None,
         enable_send_waypoint: false,
+        num_points_sent: 0,
     };
 
     eframe::run_native(
