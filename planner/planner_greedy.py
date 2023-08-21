@@ -8,6 +8,7 @@ def greedy_sequence(
     robots: List[RobotState],
     waypoints: List[Waypoint]
 ) -> List[List[TaskSpec]]:
+    print("Planning ", robots)
     """Greedily assign the closest waypoints to the robot with the least travelled distance"""
 
     remaining_waypoints = [i for i, w in enumerate(
@@ -51,20 +52,22 @@ def greedy_sequence(
 
             next_wp_dist = calculate_distance(
                 states[robot_idx].location, waypoints[selected_wp].location)
+            
+            can_charge = robots[robot_idx].battery_constraint.charger_location is not None
 
-            charger_distance = float("inf") if robots[robot_idx].battery_constraint.charger_location is None else calculate_distance(
+            charger_distance = float("inf") if not can_charge  else calculate_distance(
                 states[robot_idx].location, robots[robot_idx].battery_constraint.charger_location)  # type: ignore
 
-            next_wp_charger_distance = float("inf") if robots[robot_idx].battery_constraint.charger_location is None else calculate_distance(
+            next_wp_charger_distance = float("inf") if not can_charge else calculate_distance(
                 waypoints[selected_wp].location, robots[robot_idx].battery_constraint.charger_location)  # type: ignore
 
             # Can it not reach charger?
-            if charger_distance > states[robot_idx].remaining_battery_distance:
+            if can_charge and charger_distance > states[robot_idx].remaining_battery_distance:
                 print("Warning: robot cannot reach charger within battery limits")
                 states[robot_idx].time_travelled = float("inf")
 
             # Does it need to charge before next waypoint?
-            elif next_wp_dist + next_wp_charger_distance > states[robot_idx].remaining_battery_distance:
+            elif can_charge and next_wp_dist + next_wp_charger_distance > states[robot_idx].remaining_battery_distance:
 
                 if len(plan[robot_idx]) > 0 and plan[robot_idx][-1] == "charge":
                     print(

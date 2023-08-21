@@ -8,7 +8,15 @@ import time
 import json
 from typing import List, Optional, Tuple
 
-from model import BatteryConstraint, Location, RobotParams, RobotState, TaskID, TaskSpec, WaypointID
+from model import (
+    BatteryConstraint,
+    Location,
+    RobotParams,
+    RobotState,
+    TaskID,
+    TaskSpec,
+    WaypointID,
+)
 from robotbase import RobotBase, TaskStatus
 
 
@@ -55,14 +63,23 @@ def convert_task_isar(tag, location: Location):
     """Convert a tag string and a `Location` to the task format accepted by the ISAR HTTP interface."""
     return {
         "pose": convert_pose_isar(location),
+        "id": tag,
         "tag": tag,
-        "inspection_target": {
-            "x": 0,
-            "y": 0,
-            "z": 0,
-            "frame_name": "asset",
-        },
-        "inspection_types": ["Image"],
+        "inspections": [
+            {
+                "type": "Image",
+                "tag": tag + "-img",
+                "analysis_types": "",
+                "duration": 0,
+                "metadata": {},
+                "inspection_target": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0,
+                    "frame_name": "asset",
+                },
+            }
+        ],
     }
 
 
@@ -75,7 +92,7 @@ class ISARRobot(RobotBase):
     robot_current_location: Optional[Location] = None
     robot_battery_level: float = 1.0
     configuration: any  # type: ignore
-    capabilities :List[str]
+    capabilities: List[str]
 
     current_mission_id = None
     current_mission_tasks = None
@@ -92,11 +109,27 @@ class ISARRobot(RobotBase):
         # TODO parse charger location
         # TODO get battery distance
 
+        required_attributes = [
+            "speed",
+            "rotation_speed",
+            "capabilities",
+            "isar-url",
+            "mqtt-hostname",
+            "mqtt-port",
+        ]
+        for attr in required_attributes:
+            assert attr in configuration, f"Missing configuration attribute {attr}"
+
         self.configuration = configuration
         self._init_mqtt_interface()
-        self.params = RobotParams(float(configuration["speed"]), float(
-            configuration["rotation_speed"]),
-            configuration["capabilities"])
+
+        self.robot_battery_distance = 1000.0
+
+        self.params = RobotParams(
+            float(configuration["speed"]),
+            float(configuration["rotation_speed"]),
+            configuration["capabilities"],
+        )
 
         pass
 
@@ -108,7 +141,9 @@ class ISARRobot(RobotBase):
                 if ok:
                     self.pending_set_plan = None
 
-        return RobotState(self.params, self.robot_current_location, self.get_battery_constraint())
+        return RobotState(
+            self.params, self.robot_current_location, self.get_battery_constraint()
+        )
 
     def get_event(self) -> List[TaskStatus]:
         value = self.recent_events
@@ -130,8 +165,7 @@ class ISARRobot(RobotBase):
 
         # First, cancel existing mission
         if self.current_mission_id is not None or not self.robot_is_idle:
-            url = urljoin(
-                self.configuration["isar_url"], "schedule/stop-mission")
+            url = urljoin(self.configuration["isar-url"], "schedule/stop-mission")
             req = requests.post(url)
             print(f"Stopped {req}")
             if req.ok:
@@ -150,11 +184,15 @@ class ISARRobot(RobotBase):
         # Send the sequence as a mission to ISAR.
         mission = {
             "mission_definition": {
-                "tasks": [convert_task_isar(f"wp{tid}", loc) for tid, _, loc in waypoints],
+                "id": "iir-" + str(int(time.time())),
+                "tag": "iir-" + str(int(time.time())),
+                "tasks": [
+                    convert_task_isar(f"wp{tid}", loc) for tid, _, loc in waypoints
+                ],
             }
         }
 
-        url = urljoin(self.configuration["isar_url"], "schedule/start-mission")
+        url = urljoin(self.configuration["isar-url"], "schedule/start-mission")
         print(f"Sending ISAR command ({url}) to go to: {mission}")
         req = requests.post(url, json=mission)
         response = req.json()
@@ -184,8 +222,7 @@ class ISARRobot(RobotBase):
     def cancel_current_mission(self):
         # First, cancel existing mission
         if self.current_mission_id is not None or not self.robot_is_idle:
-            url = urljoin(
-                self.configuration["isar-url"], "schedule/stop-mission")
+            url = urljoin(self.configuration["isar-url"], "schedule/stop-mission")
             req = requests.post(url)
             print(f"Stopped {req}")
             if req.ok:
@@ -205,6 +242,7 @@ class ISARRobot(RobotBase):
         mqtt_isar_state_topic = f"isar/{robot_name}/state"
         mqtt_isar_task_topic = f"isar/{robot_name}/task"
         mqtt_isar_robot_location_topic = f"isar/{robot_name}/pose"
+        mqtt_isar_robot_status_topic = f"isar/{robot_name}/robot_status"
 
         # The callback for when the client receives a CONNACK response from the server.
         def mqtt_connect(client, userdata, flags, rc):
@@ -214,15 +252,17 @@ class ISARRobot(RobotBase):
             client.subscribe(mqtt_isar_state_topic)
             client.subscribe(mqtt_isar_task_topic)
             client.subscribe(mqtt_isar_robot_location_topic)
+            client.subscribe(mqtt_isar_robot_status_topic)
 
             # TODO override battery
             # client.subscribe(override_battery_level_topic)
 
         # The callback for when a PUBLISH message is received from the server.
         def mqtt_message(client, userdata, msg):
-            if msg.topic == mqtt_isar_state_topic:
+            if msg.topic == mqtt_isar_robot_status_topic:
                 state_msg = json.loads(msg.payload)
-                if state_msg["state"] == "idle":
+                if state_msg["current_isar_state"] == "idle":
+                    assert state_msg["current_mission_id"] is None
                     self.robot_is_idle = True
                     self.current_mission_id = None
                     self.current_mission_tasks = None
@@ -244,8 +284,7 @@ class ISARRobot(RobotBase):
                             task_msg["status"]
                         ):
                             success = task_msg["status"] == "successful"
-                            self.recent_events.append(
-                                TaskStatus(wp_id, success))
+                            self.recent_events.append(TaskStatus(wp_id, success))
 
             # TODO override battery
             # elif msg.topic == override_battery_level_topic:

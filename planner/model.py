@@ -161,8 +161,6 @@ def loc_string(location: Location):
 
 
 def integrate_robot_plan(state: RobotState, waypoints: List[Waypoint], tasks: List[TaskSpec]):
-    if state.current_location is None:
-        raise Exception("Cannot integrate robot plan with unknown position.")
 
     cost = 0
     time = 0
@@ -171,6 +169,8 @@ def integrate_robot_plan(state: RobotState, waypoints: List[Waypoint], tasks: Li
     plan = []
 
     for task in tasks:
+        if state.current_location is None:
+            raise Exception("Cannot integrate robot plan with unknown position.")
         location = state.battery_constraint.charger_location if task == "charge" else waypoints[
             task].location
         if location is None:

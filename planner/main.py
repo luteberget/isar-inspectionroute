@@ -1,5 +1,6 @@
 import json
 import time
+import sys
 import paho.mqtt.client as mqtt
 from typing import List, Optional
 from isarrobot import ISARRobot
@@ -286,7 +287,10 @@ class Controller:
 
 
 if __name__ == "__main__":
-    with open("configuration.json") as f:
+    if len(sys.argv) != 2:
+        raise Exception("Usage: main.py <CONFIG>")
+    
+    with open(sys.argv[1]) as f:
         configuration = json.load(f)
     controller = Controller(configuration)
 

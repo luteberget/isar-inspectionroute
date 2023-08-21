@@ -295,7 +295,7 @@ fn draw_battery_histories(
         .zip(status.plan.robot_plans.iter())
     {
         ui.heading(&format!("Robot #{}", robot_idx + 1));
-        let plot = egui::plot::Plot::new(format!("robhist{}", robot_idx)).height(200.0);
+        let plot = egui::plot::Plot::new(format!("robhist{}", robot_idx)).height(100.0);
 
         plot.show(ui, |plot_ui| {
             plot_ui.set_plot_bounds(PlotBounds::from_min_max([-100.0, 0.0], [120.0, 0.0]));
@@ -363,8 +363,8 @@ fn draw_sidebar(
     mut set_planning_enabled: impl FnMut(bool),
 ) {
     egui::SidePanel::left("left_panel")
-        .min_width(500.0)
-        .max_width(500.0)
+        .min_width(300.0)
+        .max_width(300.0)
         .show_inside(ui, |ui| {
             ui.heading("Planner");
             ui.label(format!("Status: {}", status.plan.status_msg));
